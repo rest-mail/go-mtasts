@@ -1,7 +1,7 @@
 # mtasts
 
-[![CI](https://github.com/rest-mail/mtasts/actions/workflows/ci.yml/badge.svg)](https://github.com/rest-mail/mtasts/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/rest-mail/mtasts.svg)](https://pkg.go.dev/github.com/rest-mail/mtasts)
+[![CI](https://github.com/rest-mail/go-mtasts/actions/workflows/ci.yml/badge.svg)](https://github.com/rest-mail/go-mtasts/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/rest-mail/go-mtasts.svg)](https://pkg.go.dev/github.com/rest-mail/go-mtasts)
 
 MTA-STS ([RFC 8461](https://www.rfc-editor.org/rfc/rfc8461)) policy discovery,
 caching, and enforcement for Go, with zero external dependencies (standard
@@ -32,7 +32,7 @@ The package exposes each step so a caller can wire it into an outbound queue:
 ## Install
 
 ```sh
-go get github.com/rest-mail/mtasts
+go get github.com/rest-mail/go-mtasts
 ```
 
 ## Usage
@@ -44,7 +44,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rest-mail/mtasts"
+	"github.com/rest-mail/go-mtasts"
 )
 
 func main() {

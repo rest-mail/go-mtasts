@@ -1,3 +1,3 @@
-module github.com/rest-mail/mtasts
+module github.com/rest-mail/go-mtasts
 
 go 1.25.0
