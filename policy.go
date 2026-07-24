@@ -1,13 +1,43 @@
-// Package mtasts implements MTA-STS (RFC 8461) policy discovery, caching, and
-// enforcement for outbound SMTP delivery.
+// Package mtasts discovers, caches, and enforces MTA-STS (RFC 8461) policies
+// for outbound SMTP delivery.
 //
-// A sending MTA discovers a recipient domain's policy by first reading the
-// _mta-sts.<domain> TXT record (which carries a policy id) and then fetching
-// the policy file from https://mta-sts.<domain>/.well-known/mta-sts.txt. When
-// the policy mode is "enforce" the sender MUST negotiate STARTTLS to an MX host
-// that is (a) named by the policy and (b) presents a certificate that is valid
-// for that MX host; otherwise delivery must be refused rather than sent in the
-// clear.
+// MTA-STS (SMTP MTA Strict Transport Security) lets a recipient domain publish
+// a policy declaring that senders MUST reach its mail servers over
+// authenticated TLS. A sending MTA discovers the policy by first reading the
+// recipient's _mta-sts.<domain> TXT record — which carries a short policy id —
+// and then, when that id is new, fetching the policy file over HTTPS from
+// https://mta-sts.<domain>/.well-known/mta-sts.txt. The policy names the MX
+// hosts allowed to receive mail and a mode: "enforce", "testing", or "none".
+//
+// When the mode is "enforce" the sender MUST negotiate STARTTLS to an MX host
+// that is (a) named by the policy and (b) presents a certificate valid for that
+// host; otherwise the message is deferred rather than delivered in the clear.
+// Discovery fails open (RFC 8461 section 5): a missing or invalid TXT record, a
+// fetch error, or an unparseable policy all fall back to ordinary opportunistic
+// TLS, so a broken policy never blocks mail.
+//
+// # Discovery and caching
+//
+// A [Resolver] performs discovery. [Resolver.Resolve] reads the TXT record,
+// serves a cached policy while its max_age has not elapsed and the id is
+// unchanged, and otherwise fetches and parses the HTTPS policy file. It returns
+// the parsed [Policy] or [ErrNoPolicy]. [ParsePolicy] parses a policy file body
+// on its own if the fetch is handled elsewhere.
+//
+// # Enforcement
+//
+// [Evaluate] applies a discovered policy to the observed TLS outcome of one
+// delivery attempt, returning a deferrable [EnforceError] when an "enforce"
+// policy is violated. [Policy.MatchesMX] reports whether a concrete MX hostname
+// is named by the policy, using RFC 6125 matching: an exact host, or a single
+// leading "*." wildcard label.
+//
+// # Testing without a network
+//
+// A Resolver's DNS and HTTPS steps are injectable through its LookupTXT,
+// FetchPolicy, and Now fields, so discovery can be driven from in-memory data
+// in tests, or pointed at an insecure fetch for a development deployment. See
+// the package example.
 package mtasts
 
 import (
@@ -129,11 +159,12 @@ func (p *Policy) MatchesMX(host string) bool {
 // policy. It handles wildcards on either side: a policy wildcard covering a
 // concrete cert name, or a wildcard cert name covering a concrete policy entry.
 //
-// Note: this is decision logic exercised by tests. The production send path
-// enforces certificate validity by requiring the STARTTLS handshake to verify
-// the certificate against the MX hostname (which MatchesMX has already confirmed
-// is named by the policy); net/smtp does not expose the negotiated
-// tls.ConnectionState, so MatchesCert is not called against the live socket.
+// MatchesCert compares names only; it does not itself verify that the
+// certificate chains to a trusted root. A typical send path lets the STARTTLS
+// handshake verify the presented certificate against the MX hostname (which
+// MatchesMX has already confirmed the policy names), so this method is most
+// useful for offline policy analysis and tests rather than gating a live
+// socket.
 func (p *Policy) MatchesCert(cert *x509.Certificate) bool {
 	if p == nil || cert == nil {
 		return false
