@@ -265,5 +265,20 @@ func HTTPFetch(ctx context.Context, url string, insecure bool) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("mtasts: policy fetch returned HTTP %d", resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, maxPolicyBody))
+	// Read one byte past the cap so an oversize body can be detected and
+	// REJECTED rather than silently truncated. Truncating at maxPolicyBody would
+	// return a prefix of the real file with no error, letting the library parse
+	// and enforce a policy the publisher never served (e.g. a trailing
+	// "mode: none" dropped, leaving an "mode: enforce" prefix in force, or a
+	// half-read mx: line minting an unintended pattern). RFC 8461 section 3.3
+	// permits imposing a size limit; it does not sanction rewriting the policy
+	// by truncation, so an oversize body is treated as no usable policy.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPolicyBody+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxPolicyBody {
+		return nil, fmt.Errorf("mtasts: policy body exceeds %d bytes; refusing to parse a truncated policy (RFC 8461 §3.3)", maxPolicyBody)
+	}
+	return body, nil
 }

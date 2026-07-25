@@ -4,6 +4,17 @@ All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the major
 version is `0`, a minor bump may carry a breaking change to the exported API.
 
+## Unreleased
+
+### Fixed
+
+- **resolver:** reject an oversized policy body instead of silently truncating
+  it. The HTTPS fetch capped the read at 64 KB and returned the truncated bytes
+  with no error, so the library could enforce a different policy than the one
+  published (e.g. a trailing `mode: none` dropped, leaving an `mode: enforce`
+  prefix in force). An oversize body is now treated as no usable policy
+  (RFC 8461 §3.3). (#9)
+
 ## v0.2.0
 
 A security and correctness release. All five fixes harden policy handling and
