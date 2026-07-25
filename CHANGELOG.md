@@ -37,6 +37,14 @@ version is `0`, a minor bump may carry a breaking change to the exported API.
   published (e.g. a trailing `mode: none` dropped, leaving an `mode: enforce`
   prefix in force). An oversize body is now treated as no usable policy
   (RFC 8461 §3.3). (#9)
+- **resolver:** negative-cache a failed policy fetch/parse per version id so a
+  broken or blocked policy host is not re-probed on every outbound message.
+  Previously only successful policies were cached; a fetch or parse failure left
+  no trace, so the next `Resolve` for the same domain immediately re-fetched,
+  amplifying load against a down or hostile policy host. A failure for a given
+  `(domain, id)` is now remembered for `NegativeTTL` (default 5 minutes) and the
+  re-fetch suppressed until it elapses, while a newly published `id` is fetched
+  immediately (RFC 8461 §3.3). (#15)
 
 ## v0.2.0
 

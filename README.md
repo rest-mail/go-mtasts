@@ -106,6 +106,9 @@ A `Resolver` discovers and caches policies. `Resolve(ctx, domain)` reads the
 `_mta-sts.<domain>` TXT record for the policy id, serves a cached policy while
 its `max_age` has not elapsed and the id is unchanged, and otherwise fetches and
 parses the HTTPS policy file. It returns the parsed `*Policy` or `ErrNoPolicy`.
+A fetch or parse failure for a given id is negative-cached for `NegativeTTL`
+(default 5 minutes), so a broken or blocked policy host is not re-probed on every
+outbound message (RFC 8461 §3.3); a newly published id is fetched immediately.
 `TXTName` and `PolicyURL` expose the DNS name and URL the resolver derives from a
 domain. If you fetch policy files yourself, `ParsePolicy` parses a body in
 isolation.

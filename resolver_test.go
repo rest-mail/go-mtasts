@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -230,6 +231,151 @@ func TestResolveRetainsCachedEnforceOnTransientFailure(t *testing.T) {
 			t.Fatalf("want ErrNoPolicy once cache expired, got %v", err)
 		}
 	})
+}
+
+// TestResolveNegativeCachesFailedFetch is the red-green guard for issue #15. A
+// failed policy fetch/parse for a given (domain, id) MUST be remembered for a
+// bounded interval so repeated Resolve calls within that window do not re-probe
+// a broken or blocked policy host on every outbound message (RFC 8461 §3.3, "no
+// more than once per five minutes per version id"). On the pre-fix resolver
+// every cache-missing Resolve re-fetches, turning any domain whose policy host
+// is down or being blocked into an outbound-side amplifier.
+func TestResolveNegativeCachesFailedFetch(t *testing.T) {
+	f := newFakeResolver()
+	f.txt[TXTName("broken.example")] = []string{"v=STSv1; id=abc"}
+	f.fetchErr = errors.New("connection refused")
+
+	// First Resolve: TXT resolves, the fetch fails -> fail-open ErrNoPolicy, and
+	// the failure is negative-cached for the default interval.
+	if _, err := f.Resolve(context.Background(), "broken.example"); !errors.Is(err, ErrNoPolicy) {
+		t.Fatalf("first resolve: want ErrNoPolicy, got %v", err)
+	}
+	if f.fetchCount != 1 {
+		t.Fatalf("first resolve: want 1 fetch, got %d", f.fetchCount)
+	}
+
+	// Second Resolve a minute later (well within the ~5-min negative TTL) must be
+	// served from the negative cache WITHOUT re-hitting the origin.
+	f.now = f.now.Add(1 * time.Minute)
+	if _, err := f.Resolve(context.Background(), "broken.example"); !errors.Is(err, ErrNoPolicy) {
+		t.Fatalf("second resolve: want ErrNoPolicy, got %v", err)
+	}
+	if f.fetchCount != 1 {
+		t.Fatalf("second resolve within the negative-cache TTL must NOT re-fetch; got %d fetches (RFC 8461 §3.3)", f.fetchCount)
+	}
+
+	// After the negative TTL lapses, the broken host may be probed once more.
+	f.now = f.now.Add(6 * time.Minute) // > 5-min default measured from the first failure
+	if _, err := f.Resolve(context.Background(), "broken.example"); !errors.Is(err, ErrNoPolicy) {
+		t.Fatalf("third resolve: want ErrNoPolicy, got %v", err)
+	}
+	if f.fetchCount != 2 {
+		t.Fatalf("after the negative-cache TTL a single retry is expected; got %d fetches", f.fetchCount)
+	}
+}
+
+// TestResolveNegativeCacheDoesNotSuppressNewID asserts the "per version id"
+// scope of issue #15: a changed TXT id is a new policy and MUST be fetched
+// immediately, never suppressed by a negative-cache entry left by the old id.
+func TestResolveNegativeCacheDoesNotSuppressNewID(t *testing.T) {
+	const dom = "broken.example"
+	f := newFakeResolver()
+	f.txt[TXTName(dom)] = []string{"v=STSv1; id=v1"}
+	f.fetchErr = errors.New("connection refused")
+
+	if _, err := f.Resolve(context.Background(), dom); !errors.Is(err, ErrNoPolicy) {
+		t.Fatalf("priming failed resolve: want ErrNoPolicy, got %v", err)
+	}
+	if f.fetchCount != 1 {
+		t.Fatalf("want 1 fetch, got %d", f.fetchCount)
+	}
+
+	// The publisher rotates the id within the negative-cache window and fixes the
+	// host. The new id must be fetched immediately, not negative-cached.
+	f.now = f.now.Add(1 * time.Minute)
+	f.txt[TXTName(dom)] = []string{"v=STSv1; id=v2"}
+	f.fetchErr = nil
+	f.policies[PolicyURL(dom)] = "version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 100000\n"
+
+	p, err := f.Resolve(context.Background(), dom)
+	if err != nil {
+		t.Fatalf("new id must be fetched, not served from the old id's negative cache: %v", err)
+	}
+	if p == nil || p.Mode != ModeEnforce {
+		t.Fatalf("want enforce policy after id rotation, got %+v", p)
+	}
+	if f.fetchCount != 2 {
+		t.Fatalf("a new version id must trigger a fetch; got %d fetches", f.fetchCount)
+	}
+}
+
+// TestResolveNegativeCacheConcurrent exercises the negative-cache fast path
+// under concurrent Resolve calls so the -race detector guards the added map
+// accesses. The negative entry is primed with a single failing fetch; every
+// concurrent Resolve within the TTL must then short-circuit before FetchPolicy,
+// so the fetch count stays at 1 and no goroutine re-probes the origin.
+func TestResolveNegativeCacheConcurrent(t *testing.T) {
+	const dom = "broken.example"
+	f := newFakeResolver()
+	f.txt[TXTName(dom)] = []string{"v=STSv1; id=abc"}
+	f.fetchErr = errors.New("connection refused")
+
+	if _, err := f.Resolve(context.Background(), dom); !errors.Is(err, ErrNoPolicy) {
+		t.Fatalf("priming failed resolve: want ErrNoPolicy, got %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 64; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := f.Resolve(context.Background(), dom); !errors.Is(err, ErrNoPolicy) {
+				t.Errorf("concurrent resolve: want ErrNoPolicy, got %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if f.fetchCount != 1 {
+		t.Fatalf("concurrent resolves within the negative-cache TTL must be served without re-fetching; got %d fetches", f.fetchCount)
+	}
+}
+
+// TestResolveNegativeTTLConfigurable checks that the public NegativeTTL field
+// lengthens the suppression window: a fetch still suppressed at the default's
+// 6-minute mark proves the caller-set 30-minute TTL is honoured.
+func TestResolveNegativeTTLConfigurable(t *testing.T) {
+	const dom = "broken.example"
+	f := newFakeResolver()
+	f.NegativeTTL = 30 * time.Minute
+	f.txt[TXTName(dom)] = []string{"v=STSv1; id=abc"}
+	f.fetchErr = errors.New("connection refused")
+
+	if _, err := f.Resolve(context.Background(), dom); !errors.Is(err, ErrNoPolicy) {
+		t.Fatalf("first resolve: want ErrNoPolicy, got %v", err)
+	}
+	if f.fetchCount != 1 {
+		t.Fatalf("want 1 fetch, got %d", f.fetchCount)
+	}
+
+	// Past the 5-minute default but well within the configured 30-minute TTL:
+	// still suppressed, so no second fetch.
+	f.now = f.now.Add(6 * time.Minute)
+	if _, err := f.Resolve(context.Background(), dom); !errors.Is(err, ErrNoPolicy) {
+		t.Fatalf("second resolve: want ErrNoPolicy, got %v", err)
+	}
+	if f.fetchCount != 1 {
+		t.Fatalf("NegativeTTL=30m must suppress a re-fetch at 6m; got %d fetches", f.fetchCount)
+	}
+
+	// Past the configured TTL: a single retry is allowed.
+	f.now = f.now.Add(25 * time.Minute) // 31m from the failure > 30m
+	if _, err := f.Resolve(context.Background(), dom); !errors.Is(err, ErrNoPolicy) {
+		t.Fatalf("third resolve: want ErrNoPolicy, got %v", err)
+	}
+	if f.fetchCount != 2 {
+		t.Fatalf("after the configured TTL a single retry is expected; got %d fetches", f.fetchCount)
+	}
 }
 
 // TestStoreOversizedMaxAgeCachesInsteadOfExpiring is the resolver-side guard for
