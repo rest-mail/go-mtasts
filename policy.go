@@ -78,7 +78,12 @@ type Policy struct {
 // and at least one mx pattern must be present unless the mode is "none".
 func ParsePolicy(body []byte) (*Policy, error) {
 	p := &Policy{}
-	sawMaxAge := false
+	// RFC 8461 section 3.2: for any non-repeated field — every field except
+	// "mx" — "all entries except for the first SHALL be ignored." We track the
+	// first occurrence of each single-valued key and drop later duplicates,
+	// including a later invalid max_age (which must not reject the policy).
+	// last-wins would let a trailing injected line silently change enforcement.
+	var sawVersion, sawMode, sawMaxAge bool
 	for _, line := range strings.Split(string(body), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -92,14 +97,25 @@ func ParsePolicy(body []byte) (*Policy, error) {
 		value = strings.TrimSpace(value)
 		switch key {
 		case "version":
+			if sawVersion {
+				continue
+			}
 			p.Version = value
+			sawVersion = true
 		case "mode":
+			if sawMode {
+				continue
+			}
 			p.Mode = value
+			sawMode = true
 		case "mx":
 			if value != "" {
 				p.MX = append(p.MX, value)
 			}
 		case "max_age":
+			if sawMaxAge {
+				continue
+			}
 			n, err := parseUint(value)
 			if err != nil {
 				return nil, fmt.Errorf("mtasts: invalid max_age %q: %w", value, err)
