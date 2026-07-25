@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"strings"
@@ -348,6 +349,19 @@ func HTTPFetch(ctx context.Context, url string, insecure bool) ([]byte, error) {
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("mtasts: policy fetch returned HTTP %d", resp.StatusCode)
+	}
+	// RFC 8461 section 3.2: the policy file is served as text/plain. Reject any
+	// other media type so a misconfigured or hijacked host that answers the
+	// policy URL with, e.g., an HTML error page or captive-portal body cannot
+	// have that body handed to ParsePolicy (which is lenient about unknown
+	// lines and could parse it into an unintended policy shape). The media type
+	// is matched case-insensitively with its parameters ignored, so both
+	// "text/plain" and "text/plain; charset=utf-8" are accepted; a missing or
+	// unparseable Content-Type cannot be confirmed as text/plain and is likewise
+	// rejected rather than trusted.
+	mediaType, _, mtErr := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if mtErr != nil || !strings.EqualFold(mediaType, "text/plain") {
+		return nil, fmt.Errorf("mtasts: policy fetch returned Content-Type %q; require text/plain (RFC 8461 §3.2)", resp.Header.Get("Content-Type"))
 	}
 	// Read one byte past the cap so an oversize body can be detected and
 	// REJECTED rather than silently truncated. Truncating at maxPolicyBody would
