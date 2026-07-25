@@ -39,7 +39,6 @@ func Example() {
 	// *EnforceError when an "enforce" policy is violated.
 	err = mtasts.Evaluate(mtasts.EvalInput{
 		Policy:    policy,
-		Mode:      policy.Mode,
 		Domain:    "example.com",
 		MXHost:    "mail.example.com",
 		STARTTLS:  true,
