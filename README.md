@@ -88,7 +88,6 @@ func main() {
 	// After connecting to an MX host and negotiating STARTTLS, judge the attempt.
 	err = mtasts.Evaluate(mtasts.EvalInput{
 		Policy:    policy,
-		Mode:      policy.Mode,
 		Domain:    "example.com",
 		MXHost:    "mail.example.com",
 		STARTTLS:  true,
@@ -118,9 +117,12 @@ isolation.
 `*EnforceError` when an `enforce` policy is violated — the outbound queue should
 retry rather than bounce. Under `enforce`, three conditions must all hold: the MX
 host is named by the policy, STARTTLS succeeded, and the certificate is valid for
-the MX host. `testing`, `none`, and "no policy" never block delivery. A caller
-may downgrade `enforce` to `testing` via `EvalInput.Mode` (e.g. when certificate
-verification is globally disabled for a dev deployment).
+the MX host. The effective mode is the discovered `Policy.Mode` (RFC 8461 §5), so
+enforcement can't be silently disabled by a caller that forgets to restate it —
+`testing`, `none`, and "no policy" never block delivery. A dev/test deployment
+that has globally disabled certificate verification can set
+`EvalInput.AllowInsecureDowngrade` to turn a would-fail into report-only; its zero
+value fails closed, so this downgrade is always a deliberate opt-in.
 
 `Policy.MatchesMX` and `Policy.MatchesCert` perform the RFC 6125 pattern match —
 an exact host, or a single leading `*.` wildcard label that matches exactly one
