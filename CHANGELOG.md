@@ -8,6 +8,12 @@ version is `0`, a minor bump may carry a breaking change to the exported API.
 
 ### Fixed
 
+- **resolver:** make a zero-value `Resolver` usable instead of a nil-panic trap.
+  `Resolve` called the `LookupTXT`/`FetchPolicy` hooks directly, so a `Resolver`
+  built as a literal (`mtasts.Resolver{}`) rather than via `NewResolver`
+  panicked on first use. The nil fields now fall back to the real-network
+  defaults (`net.DefaultResolver.LookupTXT` and a verified HTTPS fetch), exactly
+  as `Now` already defaulted to `time.Now`. (#14)
 - **resolver:** reject an oversized policy body instead of silently truncating
   it. The HTTPS fetch capped the read at 64 KB and returned the truncated bytes
   with no error, so the library could enforce a different policy than the one
