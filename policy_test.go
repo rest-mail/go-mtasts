@@ -57,6 +57,69 @@ func TestParsePolicy(t *testing.T) {
 	}
 }
 
+func TestParsePolicyDuplicateFieldsFirstWins(t *testing.T) {
+	// RFC 8461 section 3.2: for any non-repeated field (all fields except "mx"),
+	// "all entries except for the first SHALL be ignored." A trailing duplicate
+	// must not override the first occurrence (last-wins would let an injected
+	// later line silently change enforcement).
+	t.Run("duplicate mode uses first", func(t *testing.T) {
+		body := "version: STSv1\nmode: none\nmode: enforce\nmx: a.example.com\nmax_age: 100\n"
+		p, err := ParsePolicy([]byte(body))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if p.Mode != ModeNone {
+			t.Fatalf("mode = %q, want %q (first wins)", p.Mode, ModeNone)
+		}
+	})
+
+	t.Run("duplicate max_age uses first", func(t *testing.T) {
+		body := "version: STSv1\nmode: enforce\nmx: a.example.com\nmax_age: 1\nmax_age: 86400\n"
+		p, err := ParsePolicy([]byte(body))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if p.MaxAge != 1 {
+			t.Fatalf("max_age = %d, want 1 (first wins)", p.MaxAge)
+		}
+	})
+
+	t.Run("later invalid max_age duplicate is ignored", func(t *testing.T) {
+		// A valid first max_age followed by a garbage duplicate must not reject
+		// the whole policy; the duplicate is ignored and the first value stands.
+		body := "version: STSv1\nmode: enforce\nmx: a.example.com\nmax_age: 100\nmax_age: garbage\n"
+		p, err := ParsePolicy([]byte(body))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if p.MaxAge != 100 {
+			t.Fatalf("max_age = %d, want 100 (first wins)", p.MaxAge)
+		}
+	})
+
+	t.Run("duplicate version uses first", func(t *testing.T) {
+		body := "version: STSv1\nversion: STSv2\nmode: enforce\nmx: a.example.com\nmax_age: 100\n"
+		p, err := ParsePolicy([]byte(body))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if p.Version != Version {
+			t.Fatalf("version = %q, want %q (first wins)", p.Version, Version)
+		}
+	})
+
+	t.Run("mx still accumulates", func(t *testing.T) {
+		body := "version: STSv1\nmode: enforce\nmx: a.example.com\nmx: b.example.com\nmax_age: 100\n"
+		p, err := ParsePolicy([]byte(body))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !reflect.DeepEqual(p.MX, []string{"a.example.com", "b.example.com"}) {
+			t.Fatalf("mx = %v, want both patterns accumulated", p.MX)
+		}
+	})
+}
+
 func TestMatchesMX(t *testing.T) {
 	p := &Policy{MX: []string{"mail.example.com", "*.mx.example.org"}}
 	cases := []struct {
