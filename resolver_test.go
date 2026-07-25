@@ -156,6 +156,81 @@ func TestResolveFailOpen(t *testing.T) {
 	})
 }
 
+// TestResolveRetainsCachedEnforceOnTransientFailure asserts the RFC 8461 §3.1 /
+// §3.3 requirement: a valid, non-expired cached enforce policy MUST stay in
+// effect when a fresh discovery/fetch transiently fails. Dropping it (returning
+// ErrNoPolicy) would downgrade the sender to opportunistic TLS — exactly the
+// on-path downgrade the cache exists to prevent (§10.2).
+func TestResolveRetainsCachedEnforceOnTransientFailure(t *testing.T) {
+	const dom = "example.com"
+	const enforcePolicy = "version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 100000\n"
+
+	// warm primes the cache with a valid enforce policy, then returns the
+	// resolver ready to have a transient failure injected. now stays well
+	// within max_age so the cached entry remains non-expired.
+	warm := func(t *testing.T) *fakeResolver {
+		t.Helper()
+		f := newFakeResolver()
+		f.txt[TXTName(dom)] = []string{"v=STSv1; id=v1"}
+		f.policies[PolicyURL(dom)] = enforcePolicy
+		p, err := f.Resolve(context.Background(), dom)
+		if err != nil {
+			t.Fatalf("priming resolve failed: %v", err)
+		}
+		if p.Mode != ModeEnforce {
+			t.Fatalf("primed policy mode = %q, want %q", p.Mode, ModeEnforce)
+		}
+		f.now = f.now.Add(10 * time.Second) // still << max_age
+		return f
+	}
+
+	assertEnforceServed := func(t *testing.T, f *fakeResolver) {
+		t.Helper()
+		p, err := f.Resolve(context.Background(), dom)
+		if err != nil {
+			t.Fatalf("cached enforce policy dropped (fail-open downgrade): %v", err)
+		}
+		if p == nil || p.Mode != ModeEnforce {
+			t.Fatalf("served policy = %+v, want cached enforce policy", p)
+		}
+	}
+
+	t.Run("TXT lookup error", func(t *testing.T) {
+		f := warm(t)
+		f.txtErr = errors.New("dns timeout")
+		assertEnforceServed(t, f)
+	})
+
+	t.Run("TXT record missing STSv1", func(t *testing.T) {
+		f := warm(t)
+		f.txt[TXTName(dom)] = []string{"some unrelated txt"}
+		assertEnforceServed(t, f)
+	})
+
+	t.Run("id rolled but fetch fails", func(t *testing.T) {
+		f := warm(t)
+		f.txt[TXTName(dom)] = []string{"v=STSv1; id=v2"} // roll id -> forces refetch
+		f.fetchErr = errors.New("connection refused")
+		assertEnforceServed(t, f)
+	})
+
+	t.Run("id rolled but refetched policy unparseable", func(t *testing.T) {
+		f := warm(t)
+		f.txt[TXTName(dom)] = []string{"v=STSv1; id=v2"}
+		f.policies[PolicyURL(dom)] = "not a policy at all"
+		assertEnforceServed(t, f)
+	})
+
+	t.Run("expired cache still fails open", func(t *testing.T) {
+		f := warm(t)
+		f.now = f.now.Add(200000 * time.Second) // past max_age -> cache expired
+		f.txtErr = errors.New("dns timeout")
+		if _, err := f.Resolve(context.Background(), dom); !errors.Is(err, ErrNoPolicy) {
+			t.Fatalf("want ErrNoPolicy once cache expired, got %v", err)
+		}
+	})
+}
+
 func TestParseTXTID(t *testing.T) {
 	cases := []struct {
 		name    string
