@@ -55,6 +55,60 @@ func TestHTTPFetchVerifiesCertificate(t *testing.T) {
 	}
 }
 
+// TestHTTPFetchRejectsOversizedPolicy is the red-green guard for issue #9: a
+// policy body larger than the read cap must be REJECTED, not silently truncated
+// into a valid-looking policy. Here the publisher's real final directive
+// (mode: none) sits past the 64 KB cap; truncation would drop it and leave the
+// "mode: enforce" prefix in force — enforcing a policy the publisher never
+// served. RFC 8461 section 3.3 permits imposing a size limit (rejecting an
+// oversize body); nothing sanctions rewriting the policy by truncation. Before
+// the fix HTTPFetch returned the truncated prefix with no error.
+func TestHTTPFetchRejectsOversizedPolicy(t *testing.T) {
+	prefix := "version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 86400\n"
+	padding := strings.Repeat("# pad\n", (maxPolicyBody/6)+1) // pushes total past the cap
+	body := prefix + padding + "mode: none\n"
+	if len(body) <= maxPolicyBody {
+		t.Fatalf("test bug: body %d bytes is not larger than cap %d", len(body), maxPolicyBody)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	// insecure=true only to accept the plaintext test server; the size check is
+	// independent of transport.
+	got, err := HTTPFetch(context.Background(), srv.URL, true)
+	if err == nil {
+		t.Fatalf("HTTPFetch accepted a %d-byte policy (cap %d) and returned %d bytes; "+
+			"want an error rather than a silently truncated policy", len(body), maxPolicyBody, len(got))
+	}
+}
+
+// TestHTTPFetchAcceptsMaxSizedPolicy guards against over-tightening: a body
+// exactly at the cap must still be accepted intact. The reject must fire only
+// when the body exceeds maxPolicyBody, not when it equals it.
+func TestHTTPFetchAcceptsMaxSizedPolicy(t *testing.T) {
+	body := "version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 86400\n"
+	body += strings.Repeat("#", maxPolicyBody-len(body)) // pad to exactly the cap
+	if len(body) != maxPolicyBody {
+		t.Fatalf("test bug: body %d bytes, want exactly %d", len(body), maxPolicyBody)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	got, err := HTTPFetch(context.Background(), srv.URL, true)
+	if err != nil {
+		t.Fatalf("HTTPFetch rejected a cap-sized (%d-byte) policy: %v", maxPolicyBody, err)
+	}
+	if len(got) != maxPolicyBody {
+		t.Fatalf("HTTPFetch returned %d bytes for a cap-sized policy; want %d", len(got), maxPolicyBody)
+	}
+}
+
 // TestHTTPFetchDoesNotFollowRedirect asserts RFC 8461 section 3.3: a 3xx
 // redirect (here a downgrade to http://) is not followed and fails the fetch
 // instead of yielding a policy from the redirect target.
