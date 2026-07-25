@@ -143,6 +143,15 @@ or pointed at an insecure fetch for a development deployment.
 Full API reference:
 [pkg.go.dev/github.com/rest-mail/go-mtasts](https://pkg.go.dev/github.com/rest-mail/go-mtasts).
 
+## Changelog
+
+Recent releases — see [CHANGELOG.md](CHANGELOG.md) for the complete history.
+
+- **v0.2.1** (2026-07-25) — adds `Resolver.NegativeTTL` (negative caching of failed fetches); strict `_mta-sts` TXT parse, label-based wildcard MX, Content-Type validation.
+- **v0.2.0** (2026-07-25) — security and correctness release; `Evaluate` derives the mode from the discovered `Policy.Mode` so enforcement fails closed (breaking: `EvalInput.Mode` removed, new `AllowInsecureDowngrade`); HTTPS-only policy fetch.
+- **v0.1.1** (2026-07-23) — module renamed to `github.com/rest-mail/go-mtasts`; github-guard git hooks installed.
+- **v0.1.0** (2026-07-23) — initial release: MTA-STS (RFC 8461) policy discovery, caching, and enforcement.
+
 ## License
 
 [MIT](LICENSE) © 2026 rest-mail
