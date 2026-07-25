@@ -8,6 +8,14 @@ version is `0`, a minor bump may carry a breaking change to the exported API.
 
 ### Fixed
 
+- **resolver:** validate the HTTPS policy response `Content-Type`. The policy
+  fetch previously checked only the status code and size, so a response served
+  as `text/html` (a captive portal or error page) or any other media type was
+  read and handed to `ParsePolicy`, which is lenient about unknown lines and
+  could parse a stray body into an unintended policy. `HTTPFetch` now requires
+  the media type to be `text/plain` (matched case-insensitively, parameters such
+  as `charset` ignored) per RFC 8461 §3.2 and rejects anything else — including a
+  missing or unparseable `Content-Type` — as a fetch failure. (#12)
 - **resolver:** validate the `_mta-sts` TXT discovery record against the
   RFC 8461 §3.1 grammar instead of parsing it leniently. The old parser accepted
   fields in the wrong order (`id=…; v=STSv1`), whitespace inside the `v=STSv1`

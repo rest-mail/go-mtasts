@@ -131,3 +131,67 @@ func TestHTTPFetchDoesNotFollowRedirect(t *testing.T) {
 		t.Fatalf("HTTPFetch followed a downgrade redirect; want error")
 	}
 }
+
+// TestHTTPFetchRejectsNonTextPlain is the red-green guard for issue #12: a
+// policy response served with a non-text/plain media type (here text/html, as a
+// captive portal or HTTP error page would use) MUST be rejected even when the
+// body itself would parse as a valid policy. RFC 8461 §3.2 serves the policy as
+// text/plain; accepting any media type lets a misconfigured or hijacked host
+// have an HTML (or other) body handed to ParsePolicy. Before the fix HTTPFetch
+// ignored Content-Type entirely and returned the body.
+func TestHTTPFetchRejectsNonTextPlain(t *testing.T) {
+	validBody := "version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 86400\n"
+	// Media types that MUST be rejected. The empty case covers a response with
+	// no Content-Type at all: the media type cannot be confirmed as text/plain,
+	// so it is treated as a mismatch rather than trusted.
+	for _, ct := range []string{
+		"text/html",
+		"text/html; charset=utf-8",
+		"application/json",
+		"application/octet-stream",
+		"multipart/form-data; boundary=x",
+		"", // no Content-Type header
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			// Setting the header (even to "") suppresses Go's content sniffing so
+			// the test controls the media type exactly.
+			w.Header()["Content-Type"] = []string{ct}
+			_, _ = w.Write([]byte(validBody))
+		}))
+		got, err := HTTPFetch(context.Background(), srv.URL, true)
+		srv.Close()
+		if err == nil {
+			t.Fatalf("HTTPFetch accepted a policy served as Content-Type %q and returned %d bytes; "+
+				"want a media-type rejection", ct, len(got))
+		}
+	}
+}
+
+// TestHTTPFetchAcceptsTextPlain guards against over-tightening the issue #12
+// fix: a policy served as text/plain must still be accepted regardless of an
+// added charset parameter, header case, or surrounding whitespace. The media
+// type match is case-insensitive and ignores parameters (RFC 8461 §3.2).
+func TestHTTPFetchAcceptsTextPlain(t *testing.T) {
+	validBody := "version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 86400\n"
+	for _, ct := range []string{
+		"text/plain",
+		"text/plain; charset=utf-8",
+		"text/plain;charset=utf-8",
+		"Text/Plain; charset=UTF-8",
+		"TEXT/PLAIN",
+		"  text/plain  ",
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", ct)
+			_, _ = w.Write([]byte(validBody))
+		}))
+		got, err := HTTPFetch(context.Background(), srv.URL, true)
+		srv.Close()
+		if err != nil {
+			t.Fatalf("HTTPFetch rejected a text/plain policy (Content-Type %q): %v", ct, err)
+		}
+		if !strings.Contains(string(got), "STSv1") {
+			t.Fatalf("HTTPFetch(Content-Type %q) returned unexpected body: %q", ct, got)
+		}
+	}
+}
