@@ -8,6 +8,15 @@ version is `0`, a minor bump may carry a breaking change to the exported API.
 
 ### Fixed
 
+- **resolver:** validate the `_mta-sts` TXT discovery record against the
+  RFC 8461 §3.1 grammar instead of parsing it leniently. The old parser accepted
+  fields in the wrong order (`id=…; v=STSv1`), whitespace inside the `v=STSv1`
+  and `id=` tokens (`v = STSv1`), a repeated `v=`, and any `id` value regardless
+  of character set or length. It now requires the record to lead with the exact
+  `v=STSv1` token, carry exactly one `id=` whose value is `1*32(ALPHA / DIGIT)`,
+  and reject a duplicated version field; a malformed record is treated as "no
+  policy". This closes a discovery/caching hole where an attacker- or
+  typo-shaped TXT record could still drive policy resolution. (#11)
 - **resolver:** make a zero-value `Resolver` usable instead of a nil-panic trap.
   `Resolve` called the `LookupTXT`/`FetchPolicy` hooks directly, so a `Resolver`
   built as a literal (`mtasts.Resolver{}`) rather than via `NewResolver`
