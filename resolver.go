@@ -204,34 +204,97 @@ func (r *Resolver) fetchPolicy(ctx context.Context, url string) ([]byte, error) 
 }
 
 // parseTXTID extracts the policy id from the _mta-sts.<domain> TXT records.
-// Exactly one record must begin with "v=STSv1" and carry a non-empty id
-// (RFC 8461 section 3.1); anything else is treated as "no policy".
+// Exactly one record must be a syntactically valid MTA-STS TXT record per
+// RFC 8461 §3.1; more than one valid record is ambiguous and anything else is
+// treated as "no policy".
 func parseTXTID(records []string) (string, bool) {
 	found := 0
 	id := ""
 	for _, rec := range records {
-		var v, thisID string
-		for _, field := range strings.Split(rec, ";") {
-			k, val, ok := strings.Cut(field, "=")
-			if !ok {
-				continue
-			}
-			switch strings.TrimSpace(k) {
-			case "v":
-				v = strings.TrimSpace(val)
-			case "id":
-				thisID = strings.TrimSpace(val)
-			}
+		thisID, ok := parseSTSTextRecord(rec)
+		if !ok {
+			continue
 		}
-		if v == Version {
-			found++
-			id = thisID
-		}
+		found++
+		id = thisID
 	}
-	if found != 1 || id == "" {
+	if found != 1 {
 		return "", false
 	}
 	return id, true
+}
+
+// parseSTSTextRecord validates a single TXT string against the RFC 8461 §3.1
+// grammar and returns its policy id:
+//
+//	sts-text-record = sts-version 1*(field-delim sts-field) [field-delim]
+//	sts-version     = "v=STSv1"
+//	field-delim     = *WSP ";" *WSP
+//	sts-field       = sts-id / sts-extension   ; sts-id required
+//	sts-id          = "id=" 1*32(ALPHA / DIGIT)
+//
+// The record MUST lead with the exact "v=STSv1" token (no internal whitespace,
+// which rules out "v = STSv1" and fields in the wrong order), MUST carry exactly
+// one "id=" whose value is 1*32(ALPHA / DIGIT), and MUST NOT repeat the version
+// field. Whitespace is permitted only around the ";" delimiters. Unrecognized
+// extension fields are permitted and ignored. Any deviation yields ok=false so
+// the caller treats the record as absent rather than discovering/caching a
+// policy off a malformed or attacker-shaped record.
+func parseSTSTextRecord(rec string) (id string, ok bool) {
+	fields := strings.Split(strings.TrimSpace(rec), ";")
+	// v=STSv1 MUST be the first field; the version token admits no internal
+	// whitespace, so compare it exactly (the surrounding *WSP of the field-delim
+	// is absorbed by the per-field TrimSpace below and around fields[0] here).
+	if strings.TrimSpace(fields[0]) != "v="+Version {
+		return "", false
+	}
+	sawID := false
+	for _, f := range fields[1:] {
+		f = strings.TrimSpace(f)
+		switch {
+		case f == "":
+			// An empty trailing field ("v=STSv1; id=abc;") is a bare field-delim
+			// with no content; tolerate it. A field-delim without an id, e.g.
+			// "v=STSv1;", still fails below because sawID stays false.
+			continue
+		case strings.HasPrefix(f, "v="):
+			// A repeated version field is malformed (RFC 8461 §3.1).
+			return "", false
+		case strings.HasPrefix(f, "id="):
+			if sawID {
+				return "", false // duplicate id field
+			}
+			v := strings.TrimPrefix(f, "id=")
+			if !validSTSID(v) {
+				return "", false
+			}
+			id, sawID = v, true
+		default:
+			// Unrecognized extension field (sts-extension): permitted, ignored.
+		}
+	}
+	if !sawID {
+		return "", false
+	}
+	return id, true
+}
+
+// validSTSID reports whether s satisfies the sts-id value grammar
+// 1*32(ALPHA / DIGIT): between 1 and 32 characters, each an ASCII letter or
+// digit.
+func validSTSID(s string) bool {
+	if len(s) < 1 || len(s) > 32 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // HTTPFetch performs the HTTPS GET for a policy file. Per RFC 8461 section 3.3
