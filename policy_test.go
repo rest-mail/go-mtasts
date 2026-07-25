@@ -162,6 +162,7 @@ func TestMatchesMX(t *testing.T) {
 		{"a.mx.example.org", true},       // wildcard, one label
 		{"b.mx.example.org", true},       // wildcard, one label
 		{"mx.example.org", false},        // wildcard must not match bare base
+		{".mx.example.org", false},       // wildcard label must be non-empty
 		{"a.b.mx.example.org", false},    // wildcard matches exactly one label
 		{"mail.example.org", false},      // different domain
 		{"evil-mail.example.com", false}, // not a subdomain relationship

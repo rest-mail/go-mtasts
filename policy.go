@@ -238,20 +238,37 @@ func normalizeHost(h string) string {
 
 // hostMatchesPattern matches a concrete host against a policy pattern that may
 // carry a single leading wildcard label.
+//
+// Matching is per label, not per dot: host and pattern must have the same
+// number of labels. A leading "*" label matches any single non-empty label
+// ("*.example.com" matches "mail.example.com" but neither the bare
+// "example.com" — no leading label — nor "a.b.example.com" — two labels — nor
+// ".example.com" — an empty leading label). Every remaining label must match
+// exactly. Callers pass already-normalized (lower-cased, root-dot-trimmed)
+// names, so the label comparison is effectively case-insensitive.
 func hostMatchesPattern(host, pattern string) bool {
 	if host == "" || pattern == "" {
 		return false
 	}
-	if host == pattern {
-		return true
+	hostLabels := strings.Split(host, ".")
+	patLabels := strings.Split(pattern, ".")
+	if len(hostLabels) != len(patLabels) {
+		return false
 	}
-	if suffix, ok := strings.CutPrefix(pattern, "*."); ok {
-		// "*.example.com" matches "mail.example.com": host must end in
-		// ".example.com" and contribute exactly one extra label.
-		return strings.HasSuffix(host, "."+suffix) &&
-			strings.Count(host, ".") == strings.Count(suffix, ".")+1
+	for i, pl := range patLabels {
+		hl := hostLabels[i]
+		if i == 0 && pl == "*" {
+			// A wildcard covers exactly one label, which must be non-empty.
+			if hl == "" {
+				return false
+			}
+			continue
+		}
+		if pl != hl {
+			return false
+		}
 	}
-	return false
+	return true
 }
 
 // certNameMatchesPattern matches a certificate identity (which may itself be a
