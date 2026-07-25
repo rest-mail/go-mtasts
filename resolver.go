@@ -22,8 +22,8 @@ var ErrNoPolicy = errors.New("mtasts: no policy")
 const maxPolicyBody = 64 << 10
 
 // maxCacheTTL caps how long a policy is cached regardless of its max_age
-// (RFC 8461 allows up to 31557600s / ~1 year).
-const maxCacheTTL = 31557600 * time.Second
+// (RFC 8461 §3.2 allows up to 31557600s / ~1 year).
+const maxCacheTTL = maxMaxAge * time.Second
 
 // LookupTXTFunc resolves TXT records for a name. Injectable for testing.
 type LookupTXTFunc func(ctx context.Context, name string) ([]string, error)
@@ -155,10 +155,18 @@ func (r *Resolver) cachedOrNoPolicy(domain string, now time.Time) (*Policy, erro
 }
 
 func (r *Resolver) store(domain, id string, policy *Policy, now time.Time) {
-	ttl := time.Duration(policy.MaxAge) * time.Second
-	if ttl > maxCacheTTL {
-		ttl = maxCacheTTL
+	// ParsePolicy already bounds max_age to 1..maxMaxAge, but a directly
+	// constructed Policy could carry an out-of-range value. Clamp the seconds
+	// before the Duration multiplication so it can neither wrap to a negative TTL
+	// (immediate expiry -> re-fetch every message) nor exceed the cache cap.
+	seconds := policy.MaxAge
+	switch {
+	case seconds < 0:
+		seconds = 0
+	case seconds > maxMaxAge:
+		seconds = maxMaxAge
 	}
+	ttl := time.Duration(seconds) * time.Second
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.cache == nil {

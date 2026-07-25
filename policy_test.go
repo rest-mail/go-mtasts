@@ -120,6 +120,36 @@ func TestParsePolicyDuplicateFieldsFirstWins(t *testing.T) {
 	})
 }
 
+func TestParsePolicyMaxAgeRange(t *testing.T) {
+	// RFC 8461 §3.2: max_age is a plain integer number of seconds with
+	// 0 < max_age <= 31557600. A value outside that range (or one large enough to
+	// overflow the parser / the derived cache Duration) must make the policy
+	// invalid, not silently produce a bogus cache TTL.
+	t.Run("RFC maximum accepted", func(t *testing.T) {
+		body := "version: STSv1\nmode: enforce\nmx: a.example.com\nmax_age: 31557600\n"
+		p, err := ParsePolicy([]byte(body))
+		if err != nil {
+			t.Fatalf("max_age at the RFC maximum must be accepted: %v", err)
+		}
+		if p.MaxAge != 31557600 {
+			t.Fatalf("max_age = %d, want 31557600", p.MaxAge)
+		}
+	})
+
+	reject := map[string]string{
+		"one over RFC maximum": "version: STSv1\nmode: enforce\nmx: a.example.com\nmax_age: 31557601\n",
+		"overflows duration":   "version: STSv1\nmode: enforce\nmx: a.example.com\nmax_age: 9223372037\n",
+		"overflows int":        "version: STSv1\nmode: enforce\nmx: a.example.com\nmax_age: 99999999999999999999999999\n",
+	}
+	for name, body := range reject {
+		t.Run("reject/"+name, func(t *testing.T) {
+			if p, err := ParsePolicy([]byte(body)); err == nil {
+				t.Fatalf("expected out-of-range max_age to be rejected, got policy %+v", p)
+			}
+		})
+	}
+}
+
 func TestMatchesMX(t *testing.T) {
 	p := &Policy{MX: []string{"mail.example.com", "*.mx.example.org"}}
 	cases := []struct {

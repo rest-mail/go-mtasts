@@ -231,6 +231,28 @@ func TestResolveRetainsCachedEnforceOnTransientFailure(t *testing.T) {
 	})
 }
 
+// TestStoreOversizedMaxAgeCachesInsteadOfExpiring is the resolver-side guard for
+// issue #7. A policy whose max_age overflows time.Duration when multiplied by a
+// second (> 9223372036) must still yield a future expiry — clamped to the cache
+// cap — rather than a negative TTL that makes the entry expire immediately and
+// forces a re-fetch on every outbound message (defeating the cache-based
+// downgrade protection of RFC 8461 §10.2).
+func TestStoreOversizedMaxAgeCachesInsteadOfExpiring(t *testing.T) {
+	f := newFakeResolver()
+	// 9223372037 * 1e9 ns overflows int64, wrapping to a negative Duration on
+	// unfixed code.
+	policy := &Policy{Version: Version, Mode: ModeEnforce, MX: []string{"mail.example.com"}, MaxAge: 9223372037}
+	f.store("example.com", "id1", policy, f.now)
+
+	if got := f.cached("example.com", "id1", f.now); got == nil {
+		t.Fatal("oversized max_age produced an already-expired entry (negative TTL); want cached policy")
+	}
+	// The clamped entry must still be served just shy of the cache cap.
+	if got := f.cached("example.com", "id1", f.now.Add(maxCacheTTL-time.Second)); got == nil {
+		t.Fatal("entry expired before the cache cap; TTL was not clamped to maxCacheTTL")
+	}
+}
+
 func TestParseTXTID(t *testing.T) {
 	cases := []struct {
 		name    string

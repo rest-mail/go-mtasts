@@ -49,6 +49,7 @@ package mtasts
 import (
 	"crypto/x509"
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -62,6 +63,11 @@ const (
 // Version is the only MTA-STS policy version defined by RFC 8461.
 const Version = "STSv1"
 
+// maxMaxAge is the largest max_age RFC 8461 §3.2 permits: a plain integer
+// number of seconds with 0 < max_age <= 31557600 (~1 year). A value outside
+// that range makes the policy invalid rather than yielding a bogus cache TTL.
+const maxMaxAge = 31557600
+
 // Policy is a parsed MTA-STS policy file.
 type Policy struct {
 	Version string   // always "STSv1"
@@ -74,8 +80,9 @@ type Policy struct {
 //
 // It is deliberately lenient about unknown keys (per the spec) but strict about
 // the fields required to make an enforcement decision: version must be STSv1,
-// mode must be one of the defined values, max_age must be a positive integer,
-// and at least one mx pattern must be present unless the mode is "none".
+// mode must be one of the defined values, max_age must be an integer in the
+// range 1..31557600 (RFC 8461 §3.2), and at least one mx pattern must be present
+// unless the mode is "none".
 func ParsePolicy(body []byte) (*Policy, error) {
 	p := &Policy{}
 	// RFC 8461 section 3.2: for any non-repeated field — every field except
@@ -133,8 +140,14 @@ func ParsePolicy(body []byte) (*Policy, error) {
 	default:
 		return nil, fmt.Errorf("mtasts: invalid mode %q", p.Mode)
 	}
-	if !sawMaxAge || p.MaxAge <= 0 {
-		return nil, fmt.Errorf("mtasts: missing or non-positive max_age")
+	if !sawMaxAge {
+		return nil, fmt.Errorf("mtasts: missing max_age")
+	}
+	// RFC 8461 §3.2: 0 < max_age <= 31557600. An out-of-range value (including
+	// one large enough to overflow the derived cache Duration) makes the policy
+	// invalid; accepting it would produce a negative or wildly wrong cache TTL.
+	if p.MaxAge <= 0 || p.MaxAge > maxMaxAge {
+		return nil, fmt.Errorf("mtasts: max_age %d out of range (RFC 8461 §3.2 requires 1..%d)", p.MaxAge, maxMaxAge)
 	}
 	if p.Mode != ModeNone && len(p.MX) == 0 {
 		return nil, fmt.Errorf("mtasts: mode %q requires at least one mx", p.Mode)
@@ -142,18 +155,30 @@ func ParsePolicy(body []byte) (*Policy, error) {
 	return p, nil
 }
 
-// parseUint parses a non-negative base-10 integer, rejecting anything with
-// stray characters (fmt.Sscanf would silently accept "123abc").
+// parseUint parses a non-negative base-10 integer, rejecting empty input, stray
+// non-digit characters (fmt.Sscanf would silently accept "123abc"), and values
+// that overflow int. The unbounded accumulator would otherwise wrap to a
+// negative or bogus number — the root of the negative cache-TTL bug in issue #7
+// where a huge max_age silently produced an already-expired policy.
 func parseUint(s string) (int, error) {
 	if s == "" {
 		return 0, fmt.Errorf("empty")
 	}
+	const cutoff = math.MaxInt / 10
 	n := 0
 	for _, r := range s {
 		if r < '0' || r > '9' {
 			return 0, fmt.Errorf("non-digit %q", r)
 		}
-		n = n*10 + int(r-'0')
+		if n > cutoff {
+			return 0, fmt.Errorf("value overflows int")
+		}
+		n *= 10
+		d := int(r - '0')
+		if n > math.MaxInt-d {
+			return 0, fmt.Errorf("value overflows int")
+		}
+		n += d
 	}
 	return n, nil
 }
