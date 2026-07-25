@@ -12,17 +12,23 @@
 // When the mode is "enforce" the sender MUST negotiate STARTTLS to an MX host
 // that is (a) named by the policy and (b) presents a certificate valid for that
 // host; otherwise the message is deferred rather than delivered in the clear.
-// Discovery fails open (RFC 8461 section 5): a missing or invalid TXT record, a
-// fetch error, or an unparseable policy all fall back to ordinary opportunistic
-// TLS, so a broken policy never blocks mail.
+// Discovery fails open (RFC 8461 section 5) only when no policy is cached: a
+// missing or invalid TXT record, a fetch error, or an unparseable policy fall
+// back to ordinary opportunistic TLS, so a broken policy never blocks mail. A
+// valid, non-expired cached policy is never dropped by a transient discovery
+// failure, though — it stays in effect until its max_age elapses (RFC 8461
+// sections 3.1 and 3.3), which defeats the section 10.2 downgrade attack of
+// blocking the TXT response or the policy fetch.
 //
 // # Discovery and caching
 //
 // A [Resolver] performs discovery. [Resolver.Resolve] reads the TXT record,
 // serves a cached policy while its max_age has not elapsed and the id is
-// unchanged, and otherwise fetches and parses the HTTPS policy file. It returns
-// the parsed [Policy] or [ErrNoPolicy]. [ParsePolicy] parses a policy file body
-// on its own if the fetch is handled elsewhere.
+// unchanged, and otherwise fetches and parses the HTTPS policy file. If that
+// live discovery transiently fails while a non-expired policy is still cached,
+// the cached policy is served rather than dropped. It returns the parsed
+// [Policy] or [ErrNoPolicy]. [ParsePolicy] parses a policy file body on its own
+// if the fetch is handled elsewhere.
 //
 // # Enforcement
 //

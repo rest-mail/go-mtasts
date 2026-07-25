@@ -79,42 +79,58 @@ func PolicyURL(domain string) string {
 // cached policy while its max_age has not elapsed and the id is unchanged, and
 // otherwise fetches and parses the HTTPS policy file.
 //
-// Fail-open (RFC 8461 section 5): a missing/invalid TXT record, a fetch error,
-// or an unparseable policy all yield ErrNoPolicy so the caller reverts to
-// opportunistic TLS rather than blocking mail.
+// A valid, non-expired cached policy is never dropped by a transient discovery
+// failure. When the TXT lookup errors, carries no usable id, or the HTTPS
+// re-fetch fails or returns an unparseable body, Resolve serves the cached
+// policy (regardless of its id) until its max_age legitimately elapses. This
+// upholds RFC 8461 sections 3.1 and 3.3 — "the absence of a usable TXT record
+// is not by itself sufficient to remove a sender's previously cached policy",
+// and a valid cached policy MUST be applied when no live policy can be
+// discovered — and defeats the section 10.2 downgrade attack in which an
+// on-path adversary strips MTA-STS by merely blocking the TXT response or the
+// policy fetch.
+//
+// Fail-open (RFC 8461 section 5) only when no non-expired policy is cached: a
+// missing/invalid TXT record, a fetch error, or an unparseable policy then
+// yield ErrNoPolicy so the caller reverts to opportunistic TLS rather than
+// blocking mail.
 func (r *Resolver) Resolve(ctx context.Context, domain string) (*Policy, error) {
 	domain = normalizeHost(domain)
 	if domain == "" {
 		return nil, ErrNoPolicy
 	}
 
+	now := r.now()
+
 	txts, err := r.LookupTXT(ctx, TXTName(domain))
 	if err != nil {
-		return nil, ErrNoPolicy
+		return r.cachedOrNoPolicy(domain, now)
 	}
 	id, ok := parseTXTID(txts)
 	if !ok {
-		return nil, ErrNoPolicy
+		return r.cachedOrNoPolicy(domain, now)
 	}
 
-	now := r.now()
 	if p := r.cached(domain, id, now); p != nil {
 		return p, nil
 	}
 
 	body, err := r.FetchPolicy(ctx, PolicyURL(domain))
 	if err != nil {
-		return nil, ErrNoPolicy
+		return r.cachedOrNoPolicy(domain, now)
 	}
 	policy, err := ParsePolicy(body)
 	if err != nil {
-		return nil, ErrNoPolicy
+		return r.cachedOrNoPolicy(domain, now)
 	}
 
 	r.store(domain, id, policy, now)
 	return policy, nil
 }
 
+// cached returns the cached policy for domain only when it is non-expired and
+// its id matches the freshly discovered id. This is the fast path that lets
+// Resolve skip the HTTPS fetch while the published id is unchanged.
 func (r *Resolver) cached(domain, id string, now time.Time) *Policy {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -122,6 +138,20 @@ func (r *Resolver) cached(domain, id string, now time.Time) *Policy {
 		return e.policy
 	}
 	return nil
+}
+
+// cachedOrNoPolicy is the fallback taken when live discovery fails. It serves
+// any non-expired cached policy regardless of its id — the id governs whether
+// to re-fetch, not whether the cached policy is still valid — and returns
+// ErrNoPolicy only when nothing usable remains in the cache (RFC 8461 §3.1,
+// §3.3).
+func (r *Resolver) cachedOrNoPolicy(domain string, now time.Time) (*Policy, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if e, found := r.cache[domain]; found && now.Before(e.expiresAt) {
+		return e.policy, nil
+	}
+	return nil, ErrNoPolicy
 }
 
 func (r *Resolver) store(domain, id string, policy *Policy, now time.Time) {
