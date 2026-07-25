@@ -102,7 +102,7 @@ func (r *Resolver) Resolve(ctx context.Context, domain string) (*Policy, error) 
 
 	now := r.now()
 
-	txts, err := r.LookupTXT(ctx, TXTName(domain))
+	txts, err := r.lookupTXT(ctx, TXTName(domain))
 	if err != nil {
 		return r.cachedOrNoPolicy(domain, now)
 	}
@@ -115,7 +115,7 @@ func (r *Resolver) Resolve(ctx context.Context, domain string) (*Policy, error) 
 		return p, nil
 	}
 
-	body, err := r.FetchPolicy(ctx, PolicyURL(domain))
+	body, err := r.fetchPolicy(ctx, PolicyURL(domain))
 	if err != nil {
 		return r.cachedOrNoPolicy(domain, now)
 	}
@@ -180,6 +180,27 @@ func (r *Resolver) now() time.Time {
 		return r.Now()
 	}
 	return time.Now()
+}
+
+// lookupTXT resolves the policy-id TXT record, defaulting to
+// net.DefaultResolver.LookupTXT when the field is unset. Mirroring now(), this
+// lets a zero-value Resolver (mtasts.Resolver{}, not NewResolver) be used
+// without a nil-func panic.
+func (r *Resolver) lookupTXT(ctx context.Context, name string) ([]string, error) {
+	if r.LookupTXT != nil {
+		return r.LookupTXT(ctx, name)
+	}
+	return net.DefaultResolver.LookupTXT(ctx, name)
+}
+
+// fetchPolicy fetches the policy file, defaulting to a verified HTTPS GET
+// (HTTPFetch with insecure=false, matching NewResolver) when the field is
+// unset, so a zero-value Resolver does not nil-panic on the fetch step.
+func (r *Resolver) fetchPolicy(ctx context.Context, url string) ([]byte, error) {
+	if r.FetchPolicy != nil {
+		return r.FetchPolicy(ctx, url)
+	}
+	return HTTPFetch(ctx, url, false)
 }
 
 // parseTXTID extracts the policy id from the _mta-sts.<domain> TXT records.

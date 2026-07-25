@@ -253,6 +253,43 @@ func TestStoreOversizedMaxAgeCachesInsteadOfExpiring(t *testing.T) {
 	}
 }
 
+// TestZeroValueResolverDoesNotPanic asserts that a Resolver built as a literal
+// (mtasts.Resolver{}) — rather than via NewResolver — is usable rather than a
+// nil-panic trap (issue #14). Before the fix, Resolve dereferenced a nil
+// LookupTXT/FetchPolicy field and panicked; the zero value must instead fall
+// back to the real-network defaults, exactly as r.now() already falls back to
+// time.Now.
+//
+// The context is pre-cancelled so the fallbacks return promptly without doing
+// real network I/O: net.DefaultResolver.LookupTXT and the default HTTPFetch both
+// honour the cancelled context and error out, which Resolve maps to ErrNoPolicy.
+// The assertion is really "did not panic"; ErrNoPolicy is the well-defined
+// fail-open result of that cancelled discovery.
+func TestZeroValueResolverDoesNotPanic(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	t.Run("nil LookupTXT falls back to default resolver", func(t *testing.T) {
+		var r Resolver // zero value: LookupTXT, FetchPolicy, Now all nil
+		if _, err := r.Resolve(ctx, "example.com"); !errors.Is(err, ErrNoPolicy) {
+			t.Fatalf("zero-value Resolver: want ErrNoPolicy from cancelled lookup, got %v", err)
+		}
+	})
+
+	t.Run("nil FetchPolicy falls back to default fetch", func(t *testing.T) {
+		// A working TXT lookup advances Resolve to the fetch step, where a nil
+		// FetchPolicy would panic before the fix. FetchPolicy is left nil.
+		r := Resolver{
+			LookupTXT: func(context.Context, string) ([]string, error) {
+				return []string{"v=STSv1; id=abc"}, nil
+			},
+		}
+		if _, err := r.Resolve(ctx, "example.com"); !errors.Is(err, ErrNoPolicy) {
+			t.Fatalf("nil FetchPolicy: want ErrNoPolicy from cancelled fetch, got %v", err)
+		}
+	})
+}
+
 func TestParseTXTID(t *testing.T) {
 	cases := []struct {
 		name    string
