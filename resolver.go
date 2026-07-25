@@ -25,6 +25,12 @@ const maxPolicyBody = 64 << 10
 // (RFC 8461 §3.2 allows up to 31557600s / ~1 year).
 const maxCacheTTL = maxMaxAge * time.Second
 
+// defaultNegativeTTL bounds how often a failed policy fetch/parse for a given
+// version id is retried. RFC 8461 §3.3 recommends limiting retries to no more
+// than about once per five minutes per version id, so a domain whose policy
+// host is down or being blocked is not re-probed on every outbound message.
+const defaultNegativeTTL = 5 * time.Minute
+
 // LookupTXTFunc resolves TXT records for a name. Injectable for testing.
 type LookupTXTFunc func(ctx context.Context, name string) ([]string, error)
 
@@ -44,12 +50,30 @@ type Resolver struct {
 	// Now returns the current time; overridable in tests. Defaults to time.Now.
 	Now func() time.Time
 
-	mu    sync.Mutex
-	cache map[string]cacheEntry
+	// NegativeTTL is how long a failed policy fetch/parse for a given version id
+	// is remembered so repeated Resolve calls within the window do not re-probe a
+	// broken or blocked policy host (RFC 8461 §3.3). Zero uses defaultNegativeTTL
+	// (5 minutes); a value below that floor is raised to it, since a shorter
+	// interval would reopen the re-probe amplifier the negative cache exists to
+	// close.
+	NegativeTTL time.Duration
+
+	mu       sync.Mutex
+	cache    map[string]cacheEntry
+	negCache map[string]negEntry
 }
 
 type cacheEntry struct {
 	policy    *Policy
+	id        string
+	expiresAt time.Time
+}
+
+// negEntry records that discovery of policy id for a domain failed (fetch or
+// parse) and must not be retried until expiresAt. The id scopes the suppression
+// per RFC 8461 §3.3: a freshly published id is a new policy and is fetched
+// immediately rather than served from a stale failure.
+type negEntry struct {
 	id        string
 	expiresAt time.Time
 }
@@ -63,6 +87,7 @@ func NewResolver() *Resolver {
 		FetchPolicy: func(ctx context.Context, url string) ([]byte, error) { return HTTPFetch(ctx, url, false) },
 		Now:         time.Now,
 		cache:       make(map[string]cacheEntry),
+		negCache:    make(map[string]negEntry),
 	}
 }
 
@@ -94,6 +119,13 @@ func PolicyURL(domain string) string {
 // missing/invalid TXT record, a fetch error, or an unparseable policy then
 // yield ErrNoPolicy so the caller reverts to opportunistic TLS rather than
 // blocking mail.
+//
+// A fetch or parse failure for a discovered id is negative-cached for
+// NegativeTTL (default 5 minutes). While that entry is live, a later Resolve
+// that discovers the same id skips the HTTPS fetch and falls straight through to
+// the cached-or-fail-open path, so a domain whose policy host is down or being
+// blocked is not re-probed on every outbound message (RFC 8461 §3.3). The
+// suppression is scoped to the id: a newly published id is fetched immediately.
 func (r *Resolver) Resolve(ctx context.Context, domain string) (*Policy, error) {
 	domain = normalizeHost(domain)
 	if domain == "" {
@@ -115,12 +147,20 @@ func (r *Resolver) Resolve(ctx context.Context, domain string) (*Policy, error) 
 		return p, nil
 	}
 
+	// Rate-limit re-probing of a policy host that recently failed for this same
+	// id: serve any still-valid cached policy or fail open without a fresh fetch.
+	if r.recentlyFailed(domain, id, now) {
+		return r.cachedOrNoPolicy(domain, now)
+	}
+
 	body, err := r.fetchPolicy(ctx, PolicyURL(domain))
 	if err != nil {
+		r.storeFailure(domain, id, now)
 		return r.cachedOrNoPolicy(domain, now)
 	}
 	policy, err := ParsePolicy(body)
 	if err != nil {
+		r.storeFailure(domain, id, now)
 		return r.cachedOrNoPolicy(domain, now)
 	}
 
@@ -154,6 +194,37 @@ func (r *Resolver) cachedOrNoPolicy(domain string, now time.Time) (*Policy, erro
 	return nil, ErrNoPolicy
 }
 
+// recentlyFailed reports whether a fetch/parse for domain's current id failed
+// within the negative-cache TTL. It is scoped to the id so that a rotated
+// (newly published) id is never suppressed by the previous id's failure.
+func (r *Resolver) recentlyFailed(domain, id string, now time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e, found := r.negCache[domain]
+	return found && e.id == id && now.Before(e.expiresAt)
+}
+
+// storeFailure records that discovery of id for domain failed, suppressing
+// re-fetch of the same id until now+negTTL.
+func (r *Resolver) storeFailure(domain, id string, now time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.negCache == nil {
+		r.negCache = make(map[string]negEntry)
+	}
+	r.negCache[domain] = negEntry{id: id, expiresAt: now.Add(r.negTTL())}
+}
+
+// negTTL is the negative-cache lifetime: NegativeTTL when it exceeds the default
+// floor, otherwise defaultNegativeTTL. Flooring keeps a misconfigured
+// sub-default (or zero) value from reopening the per-message re-probe amplifier.
+func (r *Resolver) negTTL() time.Duration {
+	if r.NegativeTTL > defaultNegativeTTL {
+		return r.NegativeTTL
+	}
+	return defaultNegativeTTL
+}
+
 func (r *Resolver) store(domain, id string, policy *Policy, now time.Time) {
 	// ParsePolicy already bounds max_age to 1..maxMaxAge, but a directly
 	// constructed Policy could carry an out-of-range value. Clamp the seconds
@@ -173,6 +244,9 @@ func (r *Resolver) store(domain, id string, policy *Policy, now time.Time) {
 		r.cache = make(map[string]cacheEntry)
 	}
 	r.cache[domain] = cacheEntry{policy: policy, id: id, expiresAt: now.Add(ttl)}
+	// A successful fetch clears any prior negative entry so a subsequent failure
+	// starts a fresh suppression window rather than inheriting a stale one.
+	delete(r.negCache, domain)
 }
 
 func (r *Resolver) now() time.Time {
