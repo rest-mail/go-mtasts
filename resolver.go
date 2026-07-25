@@ -206,12 +206,34 @@ func parseTXTID(records []string) (string, bool) {
 }
 
 // HTTPFetch performs the HTTPS GET for a policy file. Per RFC 8461 section 3.3
-// it does not follow redirects; when insecure is false the server certificate
-// for mta-sts.<domain> is verified.
+// the policy MUST be fetched over HTTPS with a verified server certificate, and
+// redirects MUST NOT be followed:
+//
+//   - The URL scheme is pinned to https. A non-https scheme is rejected so a
+//     direct caller cannot fetch a policy over cleartext; only when insecure is
+//     explicitly set (a dev/test deployment) is a plaintext http URL permitted.
+//   - The server certificate for mta-sts.<domain> is verified unless insecure
+//     is set.
+//   - 3xx redirects are not followed, which also prevents a redirect from
+//     downgrading the fetch to http or steering it to a different host — either
+//     of which would defeat the policy origin.
+//
+// A plaintext, invalid-certificate, or redirected fetch therefore fails rather
+// than returning a policy.
 func HTTPFetch(ctx context.Context, url string, insecure bool) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
+	}
+	switch req.URL.Scheme {
+	case "https":
+		// Verified HTTPS: the required transport for a policy fetch.
+	case "http":
+		if !insecure {
+			return nil, fmt.Errorf("mtasts: refusing to fetch policy over cleartext http (RFC 8461 requires https): %s", url)
+		}
+	default:
+		return nil, fmt.Errorf("mtasts: unsupported policy URL scheme %q (RFC 8461 requires https)", req.URL.Scheme)
 	}
 	client := &http.Client{
 		Timeout: 10 * time.Second,
@@ -221,6 +243,10 @@ func HTTPFetch(ctx context.Context, url string, insecure bool) ([]byte, error) {
 				MinVersion:         tls.VersionTLS12,
 			},
 		},
+		// RFC 8461 section 3.3: HTTPS redirects MUST NOT be followed. Returning
+		// the last response surfaces any 3xx as a non-200 and fails the fetch,
+		// which also defeats a redirect that would downgrade to http or change
+		// host.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	resp, err := client.Do(req)
