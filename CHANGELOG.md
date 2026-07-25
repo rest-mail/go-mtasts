@@ -4,7 +4,22 @@ All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the major
 version is `0`, a minor bump may carry a breaking change to the exported API.
 
-## Unreleased
+## [Unreleased]
+
+## [0.2.1] - 2026-07-25
+
+### Added
+
+- **resolver:** new `NegativeTTL` field on `Resolver` for negative caching of
+  failed policy fetches. A fetch or parse failure for a given `(domain, id)` is
+  now remembered so repeated `Resolve` calls within the window do not re-probe a
+  broken or blocked policy host on every outbound message. Previously only
+  successful policies were cached, so the next `Resolve` for the same domain
+  re-fetched immediately and amplified load against a down or hostile host; a
+  newly published policy `id` is still fetched immediately. Defaults to 5 minutes
+  and is floored there — a shorter value is raised to 5 minutes so the re-probe
+  amplifier the negative cache exists to close cannot be reopened
+  (RFC 8461 §3.3).
 
 ### Fixed
 
@@ -25,6 +40,15 @@ version is `0`, a minor bump may carry a breaking change to the exported API.
   and reject a duplicated version field; a malformed record is treated as "no
   policy". This closes a discovery/caching hole where an attacker- or
   typo-shaped TXT record could still drive policy resolution. (#11)
+- **policy:** match a wildcard MX pattern by DNS label instead of by counting
+  dots and matching a suffix. The old check let `*.example.com` match
+  `.example.com` — a name with an empty leading label — because that name ends in
+  `.example.com` and carries one extra dot, satisfying the count even though the
+  wildcard label was empty. Matching now splits host and pattern into labels,
+  requires an equal label count, lets a leading `*` match exactly one non-empty
+  label, and compares every remaining label exactly. A wildcard covers exactly
+  one non-empty label per RFC 8461 §4.1, so `example.com`, `a.b.example.com`, and
+  `.example.com` are all now correctly rejected against `*.example.com`. (#13)
 - **resolver:** make a zero-value `Resolver` usable instead of a nil-panic trap.
   `Resolve` called the `LookupTXT`/`FetchPolicy` hooks directly, so a `Resolver`
   built as a literal (`mtasts.Resolver{}`) rather than via `NewResolver`
@@ -37,14 +61,6 @@ version is `0`, a minor bump may carry a breaking change to the exported API.
   published (e.g. a trailing `mode: none` dropped, leaving an `mode: enforce`
   prefix in force). An oversize body is now treated as no usable policy
   (RFC 8461 §3.3). (#9)
-- **resolver:** negative-cache a failed policy fetch/parse per version id so a
-  broken or blocked policy host is not re-probed on every outbound message.
-  Previously only successful policies were cached; a fetch or parse failure left
-  no trace, so the next `Resolve` for the same domain immediately re-fetched,
-  amplifying load against a down or hostile policy host. A failure for a given
-  `(domain, id)` is now remembered for `NegativeTTL` (default 5 minutes) and the
-  re-fetch suppressed until it elapses, while a newly published `id` is fetched
-  immediately (RFC 8461 §3.3). (#15)
 
 ## v0.2.0
 
