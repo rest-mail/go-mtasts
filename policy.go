@@ -63,9 +63,10 @@ const (
 // Version is the only MTA-STS policy version defined by RFC 8461.
 const Version = "STSv1"
 
-// maxMaxAge is the largest max_age RFC 8461 §3.2 permits: a plain integer
-// number of seconds with 0 < max_age <= 31557600 (~1 year). A value outside
-// that range makes the policy invalid rather than yielding a bogus cache TTL.
+// maxMaxAge is the largest max_age RFC 8461 §3.2 permits: a non-negative
+// integer number of seconds of at most ten digits, no larger than 31557600
+// (~1 year). A value outside that range makes the policy invalid rather than
+// yielding a bogus cache TTL.
 const maxMaxAge = 31557600
 
 // Policy is a parsed MTA-STS policy file.
@@ -78,11 +79,12 @@ type Policy struct {
 
 // ParsePolicy parses the body of an MTA-STS policy file (RFC 8461 section 3.2).
 //
-// It is deliberately lenient about unknown keys (per the spec) but strict about
-// the fields required to make an enforcement decision: version must be STSv1,
-// mode must be one of the defined values, max_age must be an integer in the
-// range 1..31557600 (RFC 8461 §3.2), and at least one mx pattern must be present
-// unless the mode is "none".
+// It is deliberately lenient about layout and unknown keys (per the spec) but
+// strict about the fields required to make an enforcement decision: version
+// must be STSv1, mode must be one of the defined values, max_age must be 1 to
+// 10 digits in the range 0..31557600, every mx must be a DNS name in A-label
+// form, optionally behind a "*." wildcard (RFC 8461 §3.2), and at least one mx
+// pattern must be present unless the mode is "none".
 func ParsePolicy(body []byte) (*Policy, error) {
 	p := &Policy{}
 	// RFC 8461 section 3.2: for any non-repeated field — every field except
@@ -116,14 +118,23 @@ func ParsePolicy(body []byte) (*Policy, error) {
 			p.Mode = value
 			sawMode = true
 		case "mx":
-			if value != "" {
-				p.MX = append(p.MX, value)
+			// RFC 8461 §3.2: sts-policy-mx-value = ["*."] Domain, and an
+			// internationalized name MUST be given as its A-label. A pattern
+			// that is not one cannot be matched as the publisher meant, so the
+			// policy is invalid rather than enforced with a pattern missing.
+			if !validMXPattern(value) {
+				return nil, fmt.Errorf("mtasts: invalid mx pattern %q", value)
 			}
+			p.MX = append(p.MX, value)
 		case "max_age":
 			if sawMaxAge {
 				continue
 			}
+			// sts-policy-max-age-value = 1*10(DIGIT).
 			n, err := parseUint(value)
+			if err == nil && len(value) > 10 {
+				err = fmt.Errorf("more than 10 digits")
+			}
 			if err != nil {
 				return nil, fmt.Errorf("mtasts: invalid max_age %q: %w", value, err)
 			}
@@ -143,11 +154,11 @@ func ParsePolicy(body []byte) (*Policy, error) {
 	if !sawMaxAge {
 		return nil, fmt.Errorf("mtasts: missing max_age")
 	}
-	// RFC 8461 §3.2: 0 < max_age <= 31557600. An out-of-range value (including
-	// one large enough to overflow the derived cache Duration) makes the policy
-	// invalid; accepting it would produce a negative or wildly wrong cache TTL.
-	if p.MaxAge <= 0 || p.MaxAge > maxMaxAge {
-		return nil, fmt.Errorf("mtasts: max_age %d out of range (RFC 8461 §3.2 requires 1..%d)", p.MaxAge, maxMaxAge)
+	// RFC 8461 §3.2: max_age is a non-negative integer, at most 31557600. A
+	// larger value makes the policy invalid; accepting it would produce a wildly
+	// wrong cache TTL. Zero is valid: the policy applies now and is not cached.
+	if p.MaxAge > maxMaxAge {
+		return nil, fmt.Errorf("mtasts: max_age %d out of range (RFC 8461 §3.2 allows 0..%d)", p.MaxAge, maxMaxAge)
 	}
 	if p.Mode != ModeNone && len(p.MX) == 0 {
 		return nil, fmt.Errorf("mtasts: mode %q requires at least one mx", p.Mode)
@@ -188,23 +199,31 @@ func parseUint(s string) (int, error) {
 // Patterns are matched per RFC 8461 section 4.1 / RFC 6125: an exact
 // (case-insensitive) match, or a single leading wildcard label ("*.example.com")
 // that matches exactly one DNS label ("mail.example.com" but not "example.com"
-// nor "a.b.example.com").
+// nor "a.b.example.com"). A host that is not itself a DNS name, such as
+// "*.example.com", matches nothing, and neither does a pattern ParsePolicy
+// would refuse, such as a bare "*", in a Policy built by hand.
 func (p *Policy) MatchesMX(host string) bool {
 	if p == nil {
 		return false
 	}
+	if !validDomain(host) {
+		return false
+	}
 	host = normalizeHost(host)
 	for _, pattern := range p.MX {
-		if hostMatchesPattern(host, normalizeHost(pattern)) {
+		if validMXPattern(pattern) && hostMatchesPattern(host, normalizeHost(pattern)) {
 			return true
 		}
 	}
 	return false
 }
 
-// MatchesCert reports whether any identity presented by cert is named by the
+// MatchesCert reports whether any DNS-ID presented by cert is named by the
 // policy. It handles wildcards on either side: a policy wildcard covering a
 // concrete cert name, or a wildcard cert name covering a concrete policy entry.
+// Only the subject alternative names count: RFC 8461 §4.2 requires a SAN
+// DNS-ID, so a certificate naming its host only in the subject common name
+// matches nothing.
 //
 // MatchesCert compares names only; it does not itself verify that the
 // certificate chains to a trusted root. A typical send path lets the STARTTLS
@@ -216,11 +235,7 @@ func (p *Policy) MatchesCert(cert *x509.Certificate) bool {
 	if p == nil || cert == nil {
 		return false
 	}
-	names := cert.DNSNames
-	if len(names) == 0 && cert.Subject.CommonName != "" {
-		names = []string{cert.Subject.CommonName}
-	}
-	for _, name := range names {
+	for _, name := range cert.DNSNames {
 		name = normalizeHost(name)
 		for _, pattern := range p.MX {
 			if certNameMatchesPattern(name, normalizeHost(pattern)) {
@@ -286,4 +301,38 @@ func certNameMatchesPattern(certName, pattern string) bool {
 		return hostMatchesPattern(pattern, certName)
 	}
 	return false
+}
+
+// validMXPattern reports whether s is an mx pattern RFC 8461 §3.2 allows:
+// ["*."] Domain, where Domain is an RFC 5321 domain name. A trailing root dot
+// is read as the absolute form of the same name, as MatchesMX reads it.
+func validMXPattern(s string) bool {
+	return validDomain(strings.TrimPrefix(s, "*."))
+}
+
+// validDomain reports whether s is an RFC 5321 §4.1.2 Domain: dot-separated
+// labels of letters, digits and hyphens, each starting and ending with a
+// letter or digit, at most 63 octets each and 253 in all, optionally followed
+// by one root dot. Non-ASCII (a U-label) is refused: RFC 8461 wants A-labels.
+func validDomain(s string) bool {
+	s = strings.TrimSuffix(s, ".")
+	if s == "" || len(s) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(s, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			c := label[i]
+			if !isAlnum(c) && c != '-' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func isAlnum(c byte) bool {
+	return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9'
 }

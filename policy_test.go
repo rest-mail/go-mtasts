@@ -7,6 +7,7 @@ import (
 	"testing"
 )
 
+// checklist: MTASTS-POL-03 MTASTS-POL-04 MTASTS-POL-05 MTASTS-POL-07
 func TestParsePolicy(t *testing.T) {
 	t.Run("valid enforce", func(t *testing.T) {
 		body := "version: STSv1\nmode: enforce\nmx: mail.example.com\nmx: *.example.net\nmax_age: 604800\n"
@@ -44,7 +45,6 @@ func TestParsePolicy(t *testing.T) {
 		"missing version":     "mode: enforce\nmx: a.example.com\nmax_age: 100\n",
 		"bad mode":            "version: STSv1\nmode: strict\nmx: a.example.com\nmax_age: 100\n",
 		"missing max_age":     "version: STSv1\nmode: enforce\nmx: a.example.com\n",
-		"zero max_age":        "version: STSv1\nmode: enforce\nmx: a.example.com\nmax_age: 0\n",
 		"non-numeric max_age": "version: STSv1\nmode: enforce\nmx: a.example.com\nmax_age: 100days\n",
 		"enforce without mx":  "version: STSv1\nmode: enforce\nmax_age: 100\n",
 	}
@@ -57,6 +57,7 @@ func TestParsePolicy(t *testing.T) {
 	}
 }
 
+// checklist: MTASTS-POL-08 MTASTS-POL-11
 func TestParsePolicyDuplicateFieldsFirstWins(t *testing.T) {
 	// RFC 8461 section 3.2: for any non-repeated field (all fields except "mx"),
 	// "all entries except for the first SHALL be ignored." A trailing duplicate
@@ -120,11 +121,24 @@ func TestParsePolicyDuplicateFieldsFirstWins(t *testing.T) {
 	})
 }
 
+// checklist: MTASTS-POL-06
 func TestParsePolicyMaxAgeRange(t *testing.T) {
-	// RFC 8461 §3.2: max_age is a plain integer number of seconds with
-	// 0 < max_age <= 31557600. A value outside that range (or one large enough to
-	// overflow the parser / the derived cache Duration) must make the policy
-	// invalid, not silently produce a bogus cache TTL.
+	// RFC 8461 §3.2: max_age is 1 to 10 digits, a non-negative number of
+	// seconds of at most 31557600. A value outside that range (or one large
+	// enough to overflow the parser / the derived cache Duration) must make the
+	// policy invalid, not silently produce a bogus cache TTL.
+	t.Run("zero accepted", func(t *testing.T) {
+		p, err := ParsePolicy([]byte("version: STSv1\nmode: enforce\nmx: a.example.com\nmax_age: 0\n"))
+		if err != nil || p.MaxAge != 0 {
+			t.Fatalf("max_age 0 = (%+v, %v), want a policy with MaxAge 0", p, err)
+		}
+	})
+	t.Run("ten digits accepted", func(t *testing.T) {
+		p, err := ParsePolicy([]byte("version: STSv1\nmode: enforce\nmx: a.example.com\nmax_age: 0000086400\n"))
+		if err != nil || p.MaxAge != 86400 {
+			t.Fatalf("max_age 0000086400 = (%+v, %v), want a policy with MaxAge 86400", p, err)
+		}
+	})
 	t.Run("RFC maximum accepted", func(t *testing.T) {
 		body := "version: STSv1\nmode: enforce\nmx: a.example.com\nmax_age: 31557600\n"
 		p, err := ParsePolicy([]byte(body))
@@ -138,6 +152,11 @@ func TestParsePolicyMaxAgeRange(t *testing.T) {
 
 	reject := map[string]string{
 		"one over RFC maximum": "version: STSv1\nmode: enforce\nmx: a.example.com\nmax_age: 31557601\n",
+		"empty":                "version: STSv1\nmode: enforce\nmx: a.example.com\nmax_age:\n",
+		"overflows int by one": "version: STSv1\nmode: enforce\nmx: a.example.com\nmax_age: 9223372036854775808\n",
+		"eleven digits":        "version: STSv1\nmode: enforce\nmx: a.example.com\nmax_age: 00000086400\n",
+		"negative":             "version: STSv1\nmode: enforce\nmx: a.example.com\nmax_age: -1\n",
+		"signed":               "version: STSv1\nmode: enforce\nmx: a.example.com\nmax_age: +86400\n",
 		"overflows duration":   "version: STSv1\nmode: enforce\nmx: a.example.com\nmax_age: 9223372037\n",
 		"overflows int":        "version: STSv1\nmode: enforce\nmx: a.example.com\nmax_age: 99999999999999999999999999\n",
 	}
@@ -150,6 +169,7 @@ func TestParsePolicyMaxAgeRange(t *testing.T) {
 	}
 }
 
+// checklist: MTASTS-MX-01 MTASTS-MX-02 MTASTS-MX-03
 func TestMatchesMX(t *testing.T) {
 	p := &Policy{MX: []string{"mail.example.com", "*.mx.example.org"}}
 	cases := []struct {
@@ -182,6 +202,7 @@ func TestMatchesMX(t *testing.T) {
 	}
 }
 
+// checklist: MTASTS-MX-05
 func TestMatchesCert(t *testing.T) {
 	policy := &Policy{MX: []string{"mail.example.com", "*.mx.example.org"}}
 
@@ -193,8 +214,10 @@ func TestMatchesCert(t *testing.T) {
 		{"exact SAN", &x509.Certificate{DNSNames: []string{"mail.example.com"}}, true},
 		{"concrete SAN under policy wildcard", &x509.Certificate{DNSNames: []string{"a.mx.example.org"}}, true},
 		{"wildcard cert SAN covers concrete policy host", &x509.Certificate{DNSNames: []string{"*.example.com"}}, true},
-		{"CN fallback", &x509.Certificate{Subject: pkix.Name{CommonName: "mail.example.com"}}, true},
+		{"subject CN does not count", &x509.Certificate{Subject: pkix.Name{CommonName: "mail.example.com"}}, false},
 		{"no matching SAN", &x509.Certificate{DNSNames: []string{"mail.other.com"}}, false},
+		{"empty SAN", &x509.Certificate{DNSNames: []string{""}}, false},
+		{"empty left-most SAN label", &x509.Certificate{DNSNames: []string{".mx.example.org"}}, false},
 		{"nil cert", nil, false},
 	}
 	for _, c := range cases {
@@ -204,6 +227,7 @@ func TestMatchesCert(t *testing.T) {
 	}
 }
 
+// checklist: MTASTS-MX-05
 func TestCertNameWildcardCoversConcretePolicy(t *testing.T) {
 	// A cert presenting a wildcard SAN "*.mx.example.org" should satisfy a
 	// policy that names a concrete host under that wildcard.

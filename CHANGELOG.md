@@ -6,6 +6,72 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+go-mtasts now meets the standard of rest-mail/rest-mail-server#374: an RFC
+8461 checklist checked in CI, a 95% coverage gate, fuzzing, the RFC's examples
+as tests, and differential tests of MX matching against foxcpp/go-mtasts.
+Writing the checklist and fuzzing found the bugs fixed below. The module is
+v0.x and its only user is REST Mail's server, so where compatibility would
+cost anything this is a clean break.
+
+### Added
+
+- **`Fetcher`**, the policy fetch `HTTPFetch` now wraps, with an injectable
+  `DialContext` and `RootCAs` so a test can serve a policy host from memory.
+  It refuses TLS below 1.2 and opens a new connection for every fetch
+  (RFC 8461 §3.3, §7.2).
+- **Daily refresh.** `Resolve` fetches a cached policy again once a day even
+  when its id is unchanged, instead of waiting for `max_age` to run out
+  (RFC 8461 §3.3, §10.2). A refresh that fails keeps the cached policy.
+- **`Resolver.RefreshFailed`**, called when discovery fails while a cached
+  policy stays in force (unless its mode is `none`), so the caller can alert
+  an administrator (RFC 8461 §3.3, §10.2).
+- **`EnforceError.Temporary`**, which reports true: an enforce failure must
+  not bounce a message (RFC 8461 §5, §5.1).
+
+### Changed
+
+- **`max_age: 0` is valid.** RFC 8461 §3.2 allows any non-negative value; the
+  policy is applied and not cached. It used to make the policy invalid.
+  `max_age` must also be at most 10 digits.
+- **Repeated TXT fields are ignored after the first.** RFC 8461 §3.2 says so
+  for TXT records as well as policy files; a record with a second `v=` or
+  `id=` used to be refused.
+- **TXT records are counted after discarding those not beginning
+  `v=STSv1;`** (RFC 8461 §3.1). Two such records, one of them invalid, used to
+  yield the valid one's id; now the domain has no policy.
+- **A `Content-Type` of `text/plain` with a malformed parameter is accepted**:
+  RFC 8461 §3.2 says to ignore the parameters.
+
+### Fixed
+
+- **mx patterns are validated.** A policy whose `mx` is not a domain name
+  (optionally behind `*.`) in A-label form, including an empty `mx:` line, is
+  invalid (RFC 8461 §3.2); it used to be enforced with the bad pattern, or
+  with an empty one silently dropped.
+- **TXT extension fields are validated** against the sts-extension grammar
+  (RFC 8461 §3.1); any `name=value` text used to pass.
+- **`MatchesCert` ignores the subject common name.** RFC 8461 §4.2 requires a
+  subject alternative name DNS-ID; a certificate naming the host only in its
+  CN used to match.
+- **`MatchesMX` matches nothing to a host that is not a DNS name**, so
+  `*.example.com` no longer matches a host literally named `*.example.com`,
+  and nothing to a pattern `ParsePolicy` would refuse, so a bare `*` in a
+  hand-built `Policy` no longer matches every single-label host, nor a host
+  padded with spaces its trimmed form. Found by the new tests and the fuzzer.
+- **`Resolve` refuses a recipient domain that is not a DNS name** (an address
+  literal, or text holding `/`, `@` or `:`) instead of splicing it into the
+  policy URL, where it could name another host, port or path (RFC 8461 §3.4).
+- **The policy fetch no longer leaves an idle connection open** after each
+  call.
+
+### What the server will feel
+
+- One extra policy fetch per recipient domain per day, from the daily refresh.
+- Domains publishing `max_age: 0` are now enforced; domains with an invalid
+  `mx` pattern, a malformed TXT extension field, or a second, invalid
+  `v=STSv1` record now have no policy (fail open), as RFC 8461 says.
+- `RefreshFailed` is opt-in; set it to log refresh failures.
+
 ## [0.2.1] - 2026-07-25
 
 ### Added
