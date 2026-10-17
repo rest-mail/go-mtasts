@@ -263,7 +263,7 @@ func TestFetcherDoesNotCache(t *testing.T) {
 	ca := newTestCA(t)
 	var mu sync.Mutex
 	requests, conns := 0, 0
-	f, srv := policyHost(t, ca, ca.leaf(t, []string{"mta-sts.example.com"}, nil), http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	f, _ := policyHost(t, ca, ca.leaf(t, []string{"mta-sts.example.com"}, nil), http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		mu.Lock()
 		requests++
 		n := requests
@@ -273,12 +273,14 @@ func TestFetcherDoesNotCache(t *testing.T) {
 		w.Header().Set("ETag", `"v1"`)
 		_, _ = w.Write([]byte(strings.Replace(testPolicyBody, "86400", strings.Repeat("1", n), 1)))
 	}), nil)
-	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
-		if s == http.StateNew {
-			mu.Lock()
-			conns++
-			mu.Unlock()
-		}
+	// Count connections where the Fetcher dials them: the server is already
+	// running, so setting its ConnState now would race with its goroutines.
+	dial := f.DialContext
+	f.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		mu.Lock()
+		conns++
+		mu.Unlock()
+		return dial(ctx, network, addr)
 	}
 	first, err := f.Fetch(context.Background(), PolicyURL("example.com"))
 	if err != nil {
