@@ -12,6 +12,8 @@ import (
 // HTTPFetch call with an http:// URL must NOT perform a cleartext policy fetch.
 // RFC 8461 section 3.3 requires the policy to be fetched over HTTPS. Before the
 // fix this returned the body over plaintext.
+//
+// checklist: MTASTS-FETCH-01
 func TestHTTPFetchRejectsCleartext(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 86400\n"))
@@ -38,6 +40,8 @@ func TestHTTPFetchRejectsCleartext(t *testing.T) {
 // TestHTTPFetchVerifiesCertificate asserts HTTPFetch validates the server
 // certificate on the secure path and only skips verification when the caller
 // explicitly opts into insecure mode.
+//
+// checklist: MTASTS-FETCH-02
 func TestHTTPFetchVerifiesCertificate(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 86400\n"))
@@ -63,6 +67,8 @@ func TestHTTPFetchVerifiesCertificate(t *testing.T) {
 // served. RFC 8461 section 3.3 permits imposing a size limit (rejecting an
 // oversize body); nothing sanctions rewriting the policy by truncation. Before
 // the fix HTTPFetch returned the truncated prefix with no error.
+//
+// checklist: MTASTS-FETCH-09
 func TestHTTPFetchRejectsOversizedPolicy(t *testing.T) {
 	prefix := "version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 86400\n"
 	padding := strings.Repeat("# pad\n", (maxPolicyBody/6)+1) // pushes total past the cap
@@ -88,6 +94,8 @@ func TestHTTPFetchRejectsOversizedPolicy(t *testing.T) {
 // TestHTTPFetchAcceptsMaxSizedPolicy guards against over-tightening: a body
 // exactly at the cap must still be accepted intact. The reject must fire only
 // when the body exceeds maxPolicyBody, not when it equals it.
+//
+// checklist: MTASTS-FETCH-09
 func TestHTTPFetchAcceptsMaxSizedPolicy(t *testing.T) {
 	body := "version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 86400\n"
 	body += strings.Repeat("#", maxPolicyBody-len(body)) // pad to exactly the cap
@@ -112,6 +120,8 @@ func TestHTTPFetchAcceptsMaxSizedPolicy(t *testing.T) {
 // TestHTTPFetchDoesNotFollowRedirect asserts RFC 8461 section 3.3: a 3xx
 // redirect (here a downgrade to http://) is not followed and fails the fetch
 // instead of yielding a policy from the redirect target.
+//
+// checklist: MTASTS-FETCH-06
 func TestHTTPFetchDoesNotFollowRedirect(t *testing.T) {
 	// Cleartext target the redirect tries to steer the fetch to.
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -139,6 +149,8 @@ func TestHTTPFetchDoesNotFollowRedirect(t *testing.T) {
 // text/plain; accepting any media type lets a misconfigured or hijacked host
 // have an HTML (or other) body handed to ParsePolicy. Before the fix HTTPFetch
 // ignored Content-Type entirely and returned the body.
+//
+// checklist: MTASTS-POL-02
 func TestHTTPFetchRejectsNonTextPlain(t *testing.T) {
 	validBody := "version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 86400\n"
 	// Media types that MUST be rejected. The empty case covers a response with
@@ -171,6 +183,8 @@ func TestHTTPFetchRejectsNonTextPlain(t *testing.T) {
 // fix: a policy served as text/plain must still be accepted regardless of an
 // added charset parameter, header case, or surrounding whitespace. The media
 // type match is case-insensitive and ignores parameters (RFC 8461 §3.2).
+//
+// checklist: MTASTS-POL-02
 func TestHTTPFetchAcceptsTextPlain(t *testing.T) {
 	validBody := "version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 86400\n"
 	for _, ct := range []string{

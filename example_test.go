@@ -11,6 +11,8 @@ import (
 // attempt against it. It injects in-memory DNS and HTTPS so the round trip is
 // self-contained. In production, use mtasts.NewResolver() as-is: it reads real
 // _mta-sts.<domain> TXT records and fetches the policy over verified HTTPS.
+//
+// checklist: MTASTS-CACHE-02 MTASTS-MX-01
 func Example() {
 	r := mtasts.NewResolver()
 
@@ -52,6 +54,8 @@ func Example() {
 
 // ExampleParsePolicy parses a policy file body directly (without discovery) and
 // checks whether a given MX host is covered by it.
+//
+// checklist: MTASTS-MX-03
 func ExampleParsePolicy() {
 	body := []byte("version: STSv1\n" +
 		"mode: enforce\n" +

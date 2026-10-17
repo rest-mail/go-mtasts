@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 
+// checklist: MTASTS-MX-01 MTASTS-MX-04 MTASTS-APPLY-01 MTASTS-APPLY-02 MTASTS-APPLY-03
 func TestEvaluate(t *testing.T) {
 	enforce := &Policy{Mode: ModeEnforce, MX: []string{"mail.example.com", "*.mx.example.com"}, MaxAge: 86400}
 	testingPol := &Policy{Mode: ModeTesting, MX: []string{"mail.example.com"}, MaxAge: 86400}
@@ -86,6 +87,8 @@ func TestEvaluate(t *testing.T) {
 // must still get enforcement. Enforcement is a property of Policy.Mode, so an
 // "enforce" policy with a mismatching MX (or missing TLS) must FAIL CLOSED even
 // when the caller supplies nothing beyond the policy itself.
+//
+// checklist: MTASTS-APPLY-01 MTASTS-APPLY-02 MTASTS-APPLY-03
 func TestEvaluateGatesOnPolicyMode(t *testing.T) {
 	enforce := &Policy{Mode: ModeEnforce, MX: []string{"mail.example.com"}, MaxAge: 86400}
 

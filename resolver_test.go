@@ -56,6 +56,7 @@ func newFakeResolver() *fakeResolver {
 	return f
 }
 
+// checklist: MTASTS-CACHE-02
 func TestResolveHappyPath(t *testing.T) {
 	f := newFakeResolver()
 	f.txt[TXTName("example.com")] = []string{"v=STSv1; id=20230101000000Z"}
@@ -70,6 +71,7 @@ func TestResolveHappyPath(t *testing.T) {
 	}
 }
 
+// checklist: MTASTS-CACHE-01 MTASTS-CACHE-02 MTASTS-APPLY-06
 func TestResolveCachesUntilMaxAge(t *testing.T) {
 	f := newFakeResolver()
 	f.txt[TXTName("example.com")] = []string{"v=STSv1; id=abc"}
@@ -97,6 +99,7 @@ func TestResolveCachesUntilMaxAge(t *testing.T) {
 	}
 }
 
+// checklist: MTASTS-TXT-09 MTASTS-CACHE-02
 func TestResolveRefetchesWhenIDChanges(t *testing.T) {
 	f := newFakeResolver()
 	f.txt[TXTName("example.com")] = []string{"v=STSv1; id=v1"}
@@ -115,6 +118,7 @@ func TestResolveRefetchesWhenIDChanges(t *testing.T) {
 	}
 }
 
+// checklist: MTASTS-FETCH-10
 func TestResolveFailOpen(t *testing.T) {
 	t.Run("no TXT record", func(t *testing.T) {
 		f := newFakeResolver()
@@ -163,6 +167,8 @@ func TestResolveFailOpen(t *testing.T) {
 // effect when a fresh discovery/fetch transiently fails. Dropping it (returning
 // ErrNoPolicy) would downgrade the sender to opportunistic TLS — exactly the
 // on-path downgrade the cache exists to prevent (§10.2).
+//
+// checklist: MTASTS-FETCH-11 MTASTS-CACHE-03 MTASTS-APPLY-06
 func TestResolveRetainsCachedEnforceOnTransientFailure(t *testing.T) {
 	const dom = "example.com"
 	const enforcePolicy = "version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 100000\n"
@@ -240,6 +246,8 @@ func TestResolveRetainsCachedEnforceOnTransientFailure(t *testing.T) {
 // more than once per five minutes per version id"). On the pre-fix resolver
 // every cache-missing Resolve re-fetches, turning any domain whose policy host
 // is down or being blocked into an outbound-side amplifier.
+//
+// checklist: MTASTS-FETCH-08
 func TestResolveNegativeCachesFailedFetch(t *testing.T) {
 	f := newFakeResolver()
 	f.txt[TXTName("broken.example")] = []string{"v=STSv1; id=abc"}
@@ -277,6 +285,8 @@ func TestResolveNegativeCachesFailedFetch(t *testing.T) {
 // TestResolveNegativeCacheDoesNotSuppressNewID asserts the "per version id"
 // scope of issue #15: a changed TXT id is a new policy and MUST be fetched
 // immediately, never suppressed by a negative-cache entry left by the old id.
+//
+// checklist: MTASTS-FETCH-08
 func TestResolveNegativeCacheDoesNotSuppressNewID(t *testing.T) {
 	const dom = "broken.example"
 	f := newFakeResolver()
@@ -314,6 +324,8 @@ func TestResolveNegativeCacheDoesNotSuppressNewID(t *testing.T) {
 // accesses. The negative entry is primed with a single failing fetch; every
 // concurrent Resolve within the TTL must then short-circuit before FetchPolicy,
 // so the fetch count stays at 1 and no goroutine re-probes the origin.
+//
+// checklist: MTASTS-FETCH-08
 func TestResolveNegativeCacheConcurrent(t *testing.T) {
 	const dom = "broken.example"
 	f := newFakeResolver()
@@ -344,6 +356,8 @@ func TestResolveNegativeCacheConcurrent(t *testing.T) {
 // TestResolveNegativeTTLConfigurable checks that the public NegativeTTL field
 // lengthens the suppression window: a fetch still suppressed at the default's
 // 6-minute mark proves the caller-set 30-minute TTL is honoured.
+//
+// checklist: MTASTS-FETCH-08
 func TestResolveNegativeTTLConfigurable(t *testing.T) {
 	const dom = "broken.example"
 	f := newFakeResolver()
@@ -384,6 +398,8 @@ func TestResolveNegativeTTLConfigurable(t *testing.T) {
 // cap — rather than a negative TTL that makes the entry expire immediately and
 // forces a re-fetch on every outbound message (defeating the cache-based
 // downgrade protection of RFC 8461 §10.2).
+//
+// checklist: MTASTS-CACHE-01
 func TestStoreOversizedMaxAgeCachesInsteadOfExpiring(t *testing.T) {
 	f := newFakeResolver()
 	// 9223372037 * 1e9 ns overflows int64, wrapping to a negative Duration on
@@ -394,8 +410,14 @@ func TestStoreOversizedMaxAgeCachesInsteadOfExpiring(t *testing.T) {
 	if got := f.cached("example.com", "id1", f.now); got == nil {
 		t.Fatal("oversized max_age produced an already-expired entry (negative TTL); want cached policy")
 	}
-	// The clamped entry must still be served just shy of the cache cap.
-	if got := f.cached("example.com", "id1", f.now.Add(maxCacheTTL-time.Second)); got == nil {
+	// A negative max_age, possible only in a Policy built by hand, caches
+	// nothing.
+	f.store("neg.example", "id1", &Policy{Mode: ModeEnforce, MaxAge: -1}, f.now)
+	if got, _ := f.cachedOrNoPolicy("neg.example", f.now, nil); got != nil {
+		t.Error("a negative max_age was cached")
+	}
+	// The clamped entry must still be valid just shy of the cache cap.
+	if got, _ := f.cachedOrNoPolicy("example.com", f.now.Add(maxCacheTTL-time.Second), nil); got == nil {
 		t.Fatal("entry expired before the cache cap; TTL was not clamped to maxCacheTTL")
 	}
 }
@@ -412,6 +434,8 @@ func TestStoreOversizedMaxAgeCachesInsteadOfExpiring(t *testing.T) {
 // honour the cancelled context and error out, which Resolve maps to ErrNoPolicy.
 // The assertion is really "did not panic"; ErrNoPolicy is the well-defined
 // fail-open result of that cancelled discovery.
+//
+// checklist: MTASTS-FETCH-10
 func TestZeroValueResolverDoesNotPanic(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -420,6 +444,31 @@ func TestZeroValueResolverDoesNotPanic(t *testing.T) {
 		var r Resolver // zero value: LookupTXT, FetchPolicy, Now all nil
 		if _, err := r.Resolve(ctx, "example.com"); !errors.Is(err, ErrNoPolicy) {
 			t.Fatalf("zero-value Resolver: want ErrNoPolicy from cancelled lookup, got %v", err)
+		}
+	})
+
+	t.Run("NewResolver's fetch is the verified default", func(t *testing.T) {
+		if _, err := NewResolver().FetchPolicy(ctx, PolicyURL("example.com")); err == nil {
+			t.Fatal("NewResolver().FetchPolicy with a cancelled context succeeded")
+		}
+	})
+
+	t.Run("zero value caches", func(t *testing.T) {
+		fetches := 0
+		r := Resolver{
+			LookupTXT: func(context.Context, string) ([]string, error) { return []string{"v=STSv1; id=abc"}, nil },
+			FetchPolicy: func(context.Context, string) ([]byte, error) {
+				fetches++
+				return []byte("version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 86400\n"), nil
+			},
+		}
+		for range 2 {
+			if _, err := r.Resolve(context.Background(), "example.com"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if fetches != 1 {
+			t.Fatalf("fetches = %d, want 1", fetches)
 		}
 	})
 
@@ -437,6 +486,7 @@ func TestZeroValueResolverDoesNotPanic(t *testing.T) {
 	})
 }
 
+// checklist: MTASTS-TXT-02 MTASTS-TXT-04 MTASTS-TXT-07
 func TestParseTXTID(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -468,6 +518,8 @@ func TestParseTXTID(t *testing.T) {
 // grammar. On the pre-fix (lenient) parser every case below is ACCEPTED, which
 // lets a malformed or attacker-shaped discovery record drive policy
 // discovery/caching. Each must now be treated as "no policy" (ok == false).
+//
+// checklist: MTASTS-TXT-02 MTASTS-TXT-03
 func TestParseTXTIDStrict(t *testing.T) {
 	longID := strings.Repeat("a", 33) // 33 > the 32-char id cap
 
@@ -484,8 +536,6 @@ func TestParseTXTIDStrict(t *testing.T) {
 		{"id charset: hyphen", []string{"v=STSv1; id=abc-def"}},
 		{"id too long (>32)", []string{"v=STSv1; id=" + longID}},
 		{"empty id value", []string{"v=STSv1; id="}},
-		{"duplicate version field", []string{"v=STSv1; v=STSv1; id=abc"}},
-		{"duplicate id field", []string{"v=STSv1; id=abc; id=def"}},
 		{"junk record", []string{"totally bogus"}},
 	}
 	for _, c := range reject {

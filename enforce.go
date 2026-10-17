@@ -16,6 +16,11 @@ func (e *EnforceError) Error() string {
 	return fmt.Sprintf("MTA-STS enforce: %s (domain=%s mx=%s)", e.Reason, e.Domain, e.MXHost)
 }
 
+// Temporary reports true: RFC 8461 §5 forbids failing a message permanently
+// for an enforce failure before checking for a new policy, and §5.1 says to
+// treat such failures as transient.
+func (e *EnforceError) Temporary() bool { return true }
+
 // EvalInput captures the observed TLS outcome of a single SMTP delivery attempt
 // to one MX host, to be judged against a discovered policy.
 type EvalInput struct {

@@ -37,5 +37,30 @@ jobs:
           version: v2.11.4
           args: --timeout=5m
 
-      - name: Run tests with race detector
-        run: go test -race -count=1 ./...
+      - name: Run tests with race detector and coverage
+        run: go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./...
+
+      # Lines left uncovered on purpose are listed, with reasons, in COVERAGE.md.
+      - name: Check statement coverage is at least 95%
+        run: |
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ { sub("%", "", $3); print $3 }')
+          echo "Statement coverage: ${total}%"
+          awk -v t="$total" 'BEGIN { exit !(t >= 95) }' || { echo "::error::statement coverage ${total}% is below 95%"; exit 1; }
+
+      # Every CHECKLIST.md item has a test, and every test names an item.
+      - name: Check the RFC checklist
+        run: go run ./internal/checklist
+
+      - name: Fuzz each target for 30 seconds
+        run: |
+          for target in FuzzParsePolicy FuzzParseTXTRecord FuzzMatchesMX; do
+            go test -run='^$' -fuzz="^${target}\$" -fuzztime=30s .
+          done
+
+      # A crash is saved under testdata/fuzz; keep it as a seed once it is fixed.
+      - name: Upload fuzz crashers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashers
+          path: testdata/fuzz
