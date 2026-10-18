@@ -10,57 +10,38 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Build & Test
+  # The RFC proof (build, vet, golangci-lint, race tests with at least 95%
+  # coverage, the checklist and 30 seconds of each fuzz target) is go-spf's
+  # reviewed workflow, pinned to one commit. Lines left uncovered on purpose
+  # are listed, with reasons, in COVERAGE.md.
+  rfc:
+    name: Verify RFC
+    uses: rest-mail/go-spf/.github/workflows/rfc-verification.yml@7d291c08d310b9c62afc287e75a534a39150fafb
+    with:
+      packages: '["./..."]'
+      checklist-dirs: '["."]'
+      fuzz-targets: >-
+        [{"package":".","target":"FuzzParsePolicy"},
+         {"package":".","target":"FuzzParseTXTRecord"},
+         {"package":".","target":"FuzzMatchesMX"}]
+
+  fixtures:
+    name: Workflow fixtures
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - run: python3 -m unittest discover -s .github/tests -v
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.25.10"
-          cache: true
-
-      - name: Build
-        run: go build ./...
-
-      - name: Run go vet
-        run: go vet ./...
-
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v8
-        with:
-          # v2.1.6 is built with Go 1.24 and refuses to lint a module that
-          # targets go 1.25.0 (go.mod). Pin a build made with Go >= 1.25.
-          version: v2.11.4
-          args: --timeout=5m
-
-      - name: Run tests with race detector and coverage
-        run: go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./...
-
-      # Lines left uncovered on purpose are listed, with reasons, in COVERAGE.md.
-      - name: Check statement coverage is at least 95%
-        run: |
-          total=$(go tool cover -func=coverage.out | awk '/^total:/ { sub("%", "", $3); print $3 }')
-          echo "Statement coverage: ${total}%"
-          awk -v t="$total" 'BEGIN { exit !(t >= 95) }' || { echo "::error::statement coverage ${total}% is below 95%"; exit 1; }
-
-      # Every CHECKLIST.md item has a test, and every test names an item.
-      - name: Check the RFC checklist
-        run: go run ./internal/checklist
-
-      - name: Fuzz each target for 30 seconds
-        run: |
-          for target in FuzzParsePolicy FuzzParseTXTRecord FuzzMatchesMX; do
-            go test -run='^$' -fuzz="^${target}\$" -fuzztime=30s .
-          done
-
-      # A crash is saved under testdata/fuzz; keep it as a seed once it is fixed.
-      - name: Upload fuzz crashers
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: fuzz-crashers
-          path: testdata/fuzz
+  # Preserve the existing required context. Skipped/cancelled proof jobs must
+  # never produce a successful Build & Test verdict.
+  build:
+    name: Build & Test
+    needs: [rfc, fixtures]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every verification job to succeed
+        env:
+          RFC_RESULT: ${{ needs.rfc.result }}
+          FIXTURE_RESULT: ${{ needs.fixtures.result }}
+        run: test "$RFC_RESULT" = success && test "$FIXTURE_RESULT" = success
