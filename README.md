@@ -155,8 +155,13 @@ certificate it made itself.
 go test -race ./...                 # all tests, no network
 go run ./internal/checklist         # CHECKLIST.md and the tests agree
 go test -run='^$' -fuzz='^FuzzParsePolicy$' -fuzztime=30s .
+python3 -m unittest discover -s .github/tests   # what CI passes the shared proof
 ```
 
+CI runs these through go-spf's reusable
+[`rfc-verification.yml`](https://github.com/rest-mail/go-spf/blob/7d291c08d310b9c62afc287e75a534a39150fafb/.github/workflows/rfc-verification.yml),
+pinned to that commit; the required `Build & Test` check passes only when it
+and the workflow fixtures in [`.github/tests`](.github/tests) both succeed.
 CI also fails below 95% statement coverage; the lines left uncovered on
 purpose are listed, each with a reason, in [COVERAGE.md](COVERAGE.md). The fuzz
 targets are `FuzzParsePolicy` (any policy body; an accepted policy is valid and
