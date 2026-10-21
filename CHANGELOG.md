@@ -47,6 +47,12 @@ cost anything this is a clean break.
 
 ### Fixed
 
+- **The policy fetch names its TLS 1.2 cipher suites.** It offers only
+  forward-secret ECDHE suites with AES or ChaCha20 (RFC 7525 §4, RFC 8461
+  §7.2). It used crypto/tls's defaults, which a program could widen to 3DES
+  and static RSA key exchange through `GODEBUG` or an older `go` line in its
+  go.mod. The checklist maps this and MX traversal (§8.4, shown by
+  `ExampleEvaluate_traverse`) to tests: 52 of 73 requirements.
 - **mx patterns are validated.** A policy whose `mx` is not a domain name
   (optionally behind `*.`) in A-label form, including an empty `mx:` line, is
   invalid (RFC 8461 §3.2); it used to be enforced with the bad pattern, or

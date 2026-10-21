@@ -2,6 +2,7 @@ package mtasts_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/rest-mail/go-mtasts"
@@ -75,4 +76,56 @@ func ExampleParsePolicy() {
 	// true
 	// true
 	// false
+}
+
+// ExampleEvaluate_traverse walks the MX candidates in preference order, as
+// RFC 8461 section 8.4 asks: the list is not filtered by the policy first, and
+// a candidate that fails validation is passed over as though it were
+// unreachable. Evaluate judges one candidate at a time, and its EnforceError
+// is temporary, so the walk moves on to the next host and the message is
+// deferred, not bounced, if none passes.
+//
+// checklist: MTASTS-MX-07
+func ExampleEvaluate_traverse() {
+	policy, err := mtasts.ParsePolicy([]byte("version: STSv1\n" +
+		"mode: enforce\n" +
+		"mx: mail.example.com\n" +
+		"mx: *.mx.example.com\n" +
+		"max_age: 604800\n"))
+	if err != nil {
+		panic(err)
+	}
+
+	// What each connection attempt found, in MX preference order.
+	candidates := []struct {
+		host                string
+		starttls, certValid bool
+	}{
+		{"mx.attacker.example", true, true}, // not named by the policy
+		{"mail.example.com", false, false},  // STARTTLS stripped
+		{"a.mx.example.com", true, false},   // certificate not valid
+		{"b.mx.example.com", true, true},
+		{"c.mx.example.com", true, true}, // not reached
+	}
+	for _, c := range candidates {
+		err := mtasts.Evaluate(mtasts.EvalInput{
+			Policy:    policy,
+			Domain:    "example.com",
+			MXHost:    c.host,
+			STARTTLS:  c.starttls,
+			CertValid: c.certValid,
+		})
+		var enforce *mtasts.EnforceError
+		if errors.As(err, &enforce) && enforce.Temporary() {
+			fmt.Printf("unreachable %s: %s\n", c.host, enforce.Reason)
+			continue
+		}
+		fmt.Printf("deliver to %s (err=%v)\n", c.host, err)
+		break
+	}
+	// Output:
+	// unreachable mx.attacker.example: MX host not named by policy
+	// unreachable mail.example.com: STARTTLS required but not established
+	// unreachable a.mx.example.com: certificate not valid for MX host
+	// deliver to b.mx.example.com (err=<nil>)
 }
