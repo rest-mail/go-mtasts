@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,38 @@ import (
 )
 
 const tableHeader = "| ID | Section | Level | Requirement | Tests |\n|----|---------|-------|-------------|-------|\n"
+
+// TestReadmeChecklistBadge uses the checker itself so n/a requirements are
+// counted in the denominator, and only validated test mappings in the numerator.
+func TestReadmeChecklistBadge(t *testing.T) {
+	root := filepath.Join("..", "..")
+	file := filepath.Join(root, "CHECKLIST.md")
+	var out bytes.Buffer
+	if code := run([]string{"-file", file, root}, &out, &out); code != 0 {
+		t.Fatalf("invalid repository checklist (exit %d):\n%s", code, out.String())
+	}
+	items, err := parseChecklist(file, func(format string, args ...any) {
+		t.Errorf(format, args...)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapped := 0
+	for _, it := range items {
+		if !it.na {
+			mapped++
+		}
+	}
+	readme, err := os.ReadFile(filepath.Join(root, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("[![Checklist: %d/%d mapped](https://img.shields.io/badge/checklist-%d%%2F%d%%20mapped-blue)](CHECKLIST.md)",
+		mapped, len(items), mapped, len(items))
+	if strings.Count(string(readme), want) != 1 {
+		t.Errorf("README must contain exactly one current checklist badge:\n%s", want)
+	}
+}
 
 // fixture writes a checklist and one test file into a new directory and runs
 // the check there. It returns the exit code and the combined output.
