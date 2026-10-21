@@ -65,7 +65,7 @@ with `go run ./internal/checklist`; the format is described in the
 | MTASTS-FETCH-13 | 3.3, 10.2 | SHOULD | Alert administrators when refreshing a cached policy fails, unless its mode is `none`. | `TestResolveRefreshFailed` |
 | MTASTS-FETCH-14 | 7.1 | MUST | The TLS SNI extension of the policy fetch names the Policy Host. | `TestFetcherSendsSNI` |
 | MTASTS-FETCH-15 | 7.2 | MUST | Support TLS 1.2 or later: the fetch refuses older versions. | `TestFetcherRequiresTLS12` |
-| MTASTS-FETCH-16 | 7.2 | SHOULD | Follow the TLS guidance of RFC 7525. | n/a: the fetch uses crypto/tls's defaults, which follow it (no SSL, no RC4, forward-secret AEAD suites first); the library sets only the minimum version. |
+| MTASTS-FETCH-16 | 7.2 | SHOULD | Follow the TLS guidance of RFC 7525: over TLS 1.2, only forward-secret ECDHE suites of at least 128 bits, never RC4, 3DES or static RSA key exchange. | `TestFetcherFollowsRFC7525` |
 
 ## Caching (§3, §3.2, §5.1)
 
@@ -94,7 +94,7 @@ with `go run ./internal/checklist`; the format is described in the
 | MTASTS-MX-04 | 4, 4.2 | MUST | Check that the MX supports STARTTLS and presents a certificate valid for the host, unexpired and chained to a trusted root. | `TestEvaluate` |
 | MTASTS-MX-05 | 4.2 | MUST | The certificate has a subject alternative name with a DNS-ID matching the host; the subject common name does not count. | `TestMatchesCert`, `TestCertNameWildcardCoversConcretePolicy` |
 | MTASTS-MX-06 | 4.2 | MAY | Check the MX certificate for revocation. | n/a: the caller's TLS handshake verifies the certificate; Evaluate takes the outcome as CertValid. |
-| MTASTS-MX-07 | 8.4 | Normative | Traverse the MX candidates as usual, treating one that fails validation as unreachable rather than filtering the list first. | n/a: the caller traverses the MX list; Evaluate judges one candidate at a time and its error is transient, so the caller moves on to the next. |
+| MTASTS-MX-07 | 8.4 | Normative | Traverse the MX candidates as usual, treating one that fails validation as unreachable rather than filtering the list first. | `ExampleEvaluate_traverse` |
 
 ## Applying the policy (§2, §5)
 

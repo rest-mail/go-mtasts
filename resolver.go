@@ -23,6 +23,26 @@ var ErrNoPolicy = errors.New("mtasts: no policy")
 // maxPolicyBody bounds the policy file read to guard against abuse.
 const maxPolicyBody = 64 << 10
 
+// fetchCipherSuites are the TLS 1.2 suites a policy fetch offers: ECDHE key
+// exchange with AES or ChaCha20, AEAD first. RFC 7525 section 4 rules out RC4
+// and suites below 128 bits such as 3DES, and asks for forward secrecy, so
+// static RSA key exchange is left out too. crypto/tls's defaults agree only
+// while GODEBUG and the main module's go line leave them alone; naming the
+// suites here keeps the fetch to them whatever program it is built into.
+// TLS 1.3 suites are not configurable and all qualify.
+var fetchCipherSuites = []uint16{
+	tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+	tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+	tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+	tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+	tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+	tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+	tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA,
+	tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,
+	tls.TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA,
+	tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
+}
+
 // maxCacheTTL caps how long a policy is cached regardless of its max_age
 // (RFC 8461 §3.2 allows up to 31557600s / ~1 year).
 const maxCacheTTL = maxMaxAge * time.Second
@@ -487,6 +507,7 @@ func (f *Fetcher) Fetch(ctx context.Context, url string) ([]byte, error) {
 				RootCAs:            f.RootCAs,
 				InsecureSkipVerify: f.Insecure, //nolint:gosec // gated by caller; enforce path always passes false
 				MinVersion:         tls.VersionTLS12,
+				CipherSuites:       fetchCipherSuites,
 			},
 			// One connection per fetch, closed when it is done: a transport
 			// made per call would otherwise keep its idle connection open.
