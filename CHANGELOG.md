@@ -15,6 +15,9 @@ cost anything this is a clean break.
 
 ### Added
 
+- README badges for the enforced ≥95% coverage gate and the checklist's
+  mapped/total requirement count. CI checks the count against the validated
+  checklist so it cannot silently drift.
 - **`Fetcher`**, the policy fetch `HTTPFetch` now wraps, with an injectable
   `DialContext` and `RootCAs` so a test can serve a policy host from memory.
   It refuses TLS below 1.2 and opens a new connection for every fetch

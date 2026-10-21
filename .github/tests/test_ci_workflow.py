@@ -72,6 +72,15 @@ def repository_fuzz_targets():
 
 
 class CallerFixtures(unittest.TestCase):
+    def test_coverage_badge_describes_the_pinned_gate(self):
+        readme = (ROOT / 'README.md').read_text()
+        self.assertIn('[![Coverage gate: ≥95%]('
+                      'https://img.shields.io/badge/coverage%20gate-%E2%89%A595%25-brightgreen)]'
+                      '(COVERAGE.md)', readme)
+        # This audited pin enforces 95..100%; changing it requires reviewing
+        # the gate as well as the workflow contract below.
+        self.assertIn(PRODUCER, job('rfc'))
+
     def test_proof_is_the_pinned_go_spf_workflow(self):
         self.assertEqual(re.findall(r'^    uses: (\S+)\s*$', job('rfc'), re.M), [PRODUCER])
         workflows = [ref for ref in re.findall(r'uses:\s*(\S+)', CALLER) if '/.github/workflows/' in ref]
@@ -133,6 +142,14 @@ class ProducerContractFixtures(unittest.TestCase):
     def test_caller_passes_only_declared_inputs(self):
         passed = re.findall(r'^      ([a-z-]+):', job('rfc'), re.M)
         self.assertEqual(sorted(passed), sorted(self.declared))
+
+    def test_coverage_badge_matches_the_producer_threshold(self):
+        for total in ['0', '94.9', '100.1']:
+            with self.subTest(total=total), self.assertRaises(ValueError):
+                self.proof['coverage_total'](f'total: (statements) {total}%\n')
+        for total in ['95', '95.0', '99.8', '100']:
+            with self.subTest(total=total), contextlib.redirect_stdout(io.StringIO()):
+                self.proof['coverage_total'](f'total: (statements) {total}%\n')
 
     def test_producer_accepts_inputs_and_runs_every_proof(self):
         calls = []

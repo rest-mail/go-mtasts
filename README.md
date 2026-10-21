@@ -1,6 +1,8 @@
 # go-mtasts
 
 [![CI](https://github.com/rest-mail/go-mtasts/actions/workflows/ci.yml/badge.svg)](https://github.com/rest-mail/go-mtasts/actions/workflows/ci.yml)
+[![Coverage gate: ≥95%](https://img.shields.io/badge/coverage%20gate-%E2%89%A595%25-brightgreen)](COVERAGE.md)
+[![Checklist: 50/73 mapped](https://img.shields.io/badge/checklist-50%2F73%20mapped-blue)](CHECKLIST.md)
 [![Go Reference](https://pkg.go.dev/badge/github.com/rest-mail/go-mtasts.svg)](https://pkg.go.dev/github.com/rest-mail/go-mtasts)
 [![Go Report Card](https://goreportcard.com/badge/github.com/rest-mail/go-mtasts)](https://goreportcard.com/report/github.com/rest-mail/go-mtasts)
 
@@ -163,8 +165,14 @@ CI runs these through go-spf's reusable
 pinned to that commit; the required `Build & Test` check passes only when it
 and the workflow fixtures in [`.github/tests`](.github/tests) both succeed.
 CI also fails below 95% statement coverage; the lines left uncovered on
-purpose are listed, each with a reason, in [COVERAGE.md](COVERAGE.md). The fuzz
-targets are `FuzzParsePolicy` (any policy body; an accepted policy is valid and
+purpose are listed, each with a reason, in [COVERAGE.md](COVERAGE.md). The
+coverage badge states this enforced minimum; the measured percentage is in
+each CI run's `RFC proof` log. The checklist badge counts requirements mapped
+to tests over all requirements, including `n/a` rows in the total. CI validates
+the mappings and rejects a stale badge count. These badges describe the
+checked-in contract; the CI badge shows whether verification passed.
+
+The fuzz targets are `FuzzParsePolicy` (any policy body; an accepted policy is valid and
 parses again as itself when written out), `FuzzParseTXTRecord` (any TXT
 record; an accepted id is valid and came from a US-ASCII record led by
 `v=STSv1`) and `FuzzMatchesMX` (any pattern and host; a match ignores case and
