@@ -7,13 +7,32 @@ by the sender's side of [RFC 8460](https://www.rfc-editor.org/rfc/rfc8460)
 MUST NOT, SHOULD, SHOULD NOT, RECOMMENDED and NOT RECOMMENDED that applies to a
 sender, the MAYs the library implements, and the normative behaviour that
 carries no keyword (level "Normative"), such as the grammars of the TXT record
-and the policy file. Requirements on Policy Domains and Policy Hosts are left
-out, except where a sender checks them. A section number alone is RFC 8461.
+and the policy file. Publisher and SMTP transport requirements are also
+listed with explicit responsibility boundaries. A section number alone is RFC 8461.
 
 An item that does not apply to a library (because it is the sending MTA's
 delivery loop, say) says "n/a" and why. CI checks this file against the tests
 with `go run ./internal/checklist`; the format is described in the
 [README](README.md#the-rfc-checklist).
+
+## Audit scope
+
+Section-by-section audit (2026-10-22): RFC 8461 §§1–11, including
+§§1.1, 3.1–3.4, 4.1–4.2, 5.1, 7.1–7.2, 8.1–8.4, 9.1–9.3,
+10.1–10.5, 11.1–11.2, and Appendices A–B. Sections 1 and 11 provide
+terminology/references; §9 registers the existing fields and URI rather than
+adding sender requirements. Section 10's keyword requirements are covered by
+the refresh/cache rows; its remaining text describes threats and mitigations.
+The imported RFCs have not received a fresh exhaustive audit here. RFC 8460's
+existing rows remain an inventory of unsupported TLS-RPT duties, not a claim
+of TLS-RPT conformance or a new RFC 8460 audit.
+
+This pass adds previously omitted publisher and SMTP transport MUST/SHOULD
+requirements, separating them from the HTTPS fetcher's guarantees. In
+particular, a temporary error does not prove the queue checked DNS before a
+final bounce. `n/a` records a responsibility or an unsupported feature; it does
+not mean the requirement has been satisfied by this library. Revocation and
+TLS-RPT remain unsupported by owner decision.
 
 ## The TXT record (§3.1)
 
@@ -28,6 +47,7 @@ with `go run ./internal/checklist`; the format is described in the
 | MTASTS-TXT-07 | 3.2 | MUST | Accept a valid record with fields this specification does not define, ignoring them. | `TestParseTXTID`, `TestTXTRecordGrammar` |
 | MTASTS-TXT-08 | 3.2 | SHALL | When `v=` or `id=` is repeated, ignore every occurrence after the first. | `TestTXTRecordFirstWins` |
 | MTASTS-TXT-09 | 3.1 | Normative | The id only says whether a policy changed: compare it with the cached id for equality, with no ordering between ids. | `TestResolveRefetchesWhenIDChanges`, `TestResolveIDHasNoOrder` |
+| MTASTS-TXT-10 | 3.1 | MUST | A published id uniquely identifies a policy instance so senders can detect updates. | n/a: the Policy Domain assigns ids; the resolver cannot know whether a publisher changed content without changing its id. |
 
 ## The policy file (§3.2)
 
@@ -57,22 +77,29 @@ with `go run ./internal/checklist`; the format is described in the
 | MTASTS-FETCH-05 | 3.3 | Normative | A policy is valid only from a 200 (OK) response. | `TestFetcherRequiresStatus200` |
 | MTASTS-FETCH-06 | 3.3 | MUST NOT | Follow HTTP 3xx redirects. | `TestHTTPFetchDoesNotFollowRedirect` |
 | MTASTS-FETCH-07 | 3.3, 8.2 | MUST NOT | Use HTTP caching when fetching a policy. | `TestFetcherDoesNotCache` |
-| MTASTS-FETCH-08 | 3.3 | SHOULD | After a failed fetch, try again no sooner than five minutes later for the same version id. | `TestResolveNegativeCachesFailedFetch`, `TestResolveNegativeCacheDoesNotSuppressNewID`, `TestResolveNegativeCacheConcurrent`, `TestResolveNegativeTTLConfigurable` |
+| MTASTS-FETCH-08 | 3.3 | SHOULD | After a failed fetch, try again no sooner than five minutes later for the same version id. | `TestResolveNegativeCachesFailedFetch`, `TestResolveNegativeCacheDoesNotSuppressNewID`, `TestResolveNegativeCacheConcurrent`, `TestResolveNegativeTTLConfigurable`, `TestResolveLifetimesStartAfterFetch` |
 | MTASTS-FETCH-09 | 3.3 | MAY | Impose a timeout and a limit on the size of the body (64 KB suggested); a larger body is not a policy. | `TestHTTPFetchRejectsOversizedPolicy`, `TestHTTPFetchAcceptsMaxSizedPolicy`, `TestFetcherHonoursContext`, `TestFetcherBodyReadError` |
-| MTASTS-FETCH-10 | 3.3 | MUST | With a valid TXT record but no policy fetched and none cached, deliver as though the domain had no MTA-STS. | `TestResolveFailOpen`, `TestZeroValueResolverDoesNotPanic` |
-| MTASTS-FETCH-11 | 3.3 | MUST | When no live policy can be discovered but a valid cached one exists, apply the cached policy. | `TestResolveRetainsCachedEnforceOnTransientFailure` |
+| MTASTS-FETCH-10 | 3.3 | MUST | With a valid TXT record but no policy fetched and none cached, deliver as though the domain had no MTA-STS. | `TestResolveFailOpen`, `TestZeroValueResolverDoesNotPanic`, `TestResolveExpiryDuringDiscovery` |
+| MTASTS-FETCH-11 | 3.3 | MUST | When no live policy can be discovered but a valid cached one exists, apply the cached policy. | `TestResolveRetainsCachedEnforceOnTransientFailure`, `TestResolveExpiryDuringDiscovery` |
 | MTASTS-FETCH-12 | 3.3, 10.2 | SHOULD | Refresh cached policies before they expire (once a day is suggested); do not wait for a cached policy to expire before checking for an update. | `TestResolveRefreshesDaily` |
 | MTASTS-FETCH-13 | 3.3, 10.2 | SHOULD | Alert administrators when refreshing a cached policy fails, unless its mode is `none`. | `TestResolveRefreshFailed` |
 | MTASTS-FETCH-14 | 7.1 | MUST | The TLS SNI extension of the policy fetch names the Policy Host. | `TestFetcherSendsSNI` |
 | MTASTS-FETCH-15 | 7.2 | MUST | Support TLS 1.2 or later: the fetch refuses older versions. | `TestFetcherRequiresTLS12` |
 | MTASTS-FETCH-16 | 7.2 | SHOULD | Follow the TLS guidance of RFC 7525: over TLS 1.2, only forward-secret ECDHE suites of at least 128 bits, never RC4, 3DES or static RSA key exchange. | `TestFetcherFollowsRFC7525` |
+| MTASTS-FETCH-17 | 3.3 | SHOULD | Policy Hosts return a complete policy within the sender's timeout and size limits (suggested one minute and 64 KB). | n/a: publisher HTTP service duty; the library is a client with its own timeout and body limit. |
+| MTASTS-FETCH-18 | 7.1 | MUST | The SMTP client's TLS handshake supports SNI and sends the MX hostname. | n/a: the caller negotiates SMTP STARTTLS; Evaluate receives its outcome and opens no SMTP connection. |
+| MTASTS-FETCH-19 | 7.1 | MUST | The policy HTTP server supplies a certificate chain matching the Policy Host or aborts the handshake. | n/a: publisher TLS server duty; the fetcher independently verifies the presented chain under FETCH-02. |
+| MTASTS-FETCH-20 | 7.1 | MUST NOT | SMTP servers require clients to send SNI, since opportunistic TLS clients may omit it. | n/a: receiving SMTP server duty; this library implements no SMTP server. |
+| MTASTS-FETCH-21 | 7.1 | MUST | An SMTP server sends a fallback certificate chain when SNI is absent or names an unsupported host. | n/a: receiving SMTP server duty; this library implements no SMTP server. |
+| MTASTS-FETCH-22 | 7.2 | MUST | The MTA's SMTP transport supports TLS 1.2 or TLS 1.3 or higher. | n/a: caller SMTP transport duty; FETCH-15 tests only this library's HTTPS transport. |
+| MTASTS-FETCH-23 | 7.2 | SHOULD | The MTA's SMTP transport follows RFC 7525 TLS usage guidance. | n/a: caller SMTP transport duty; FETCH-16 tests the HTTPS cipher-suite selection, not the caller's TLS settings. |
 
 ## Caching (§3, §3.2, §5.1)
 
 | ID | Section | Level | Requirement | Tests |
 |----|---------|-------|-------------|-------|
-| MTASTS-CACHE-01 | 3.2, 5.1 | SHOULD | Cache a policy for up to `max_age` seconds from when it was fetched; a `max_age` of 0 applies the policy without caching it. | `TestResolveCachesUntilMaxAge`, `TestStoreOversizedMaxAgeCachesInsteadOfExpiring`, `TestResolveMaxAgeZero` |
-| MTASTS-CACHE-02 | 3, 5.1 | Normative | While the TXT record's id equals the cached policy's, use the cached policy without an HTTPS fetch; a new id means a new policy to fetch. | `TestResolveHappyPath`, `TestResolveCachesUntilMaxAge`, `TestResolveRefetchesWhenIDChanges`, `Example` |
+| MTASTS-CACHE-01 | 3.2, 5.1 | SHOULD | Cache a policy for up to `max_age` seconds from when the fetch completed; a `max_age` of 0 applies the policy without caching it. | `TestResolveCachesUntilMaxAge`, `TestStoreOversizedMaxAgeCachesInsteadOfExpiring`, `TestResolveMaxAgeZero`, `TestResolveLifetimesStartAfterFetch` |
+| MTASTS-CACHE-02 | 3, 5.1 | Normative | While the TXT record's id equals a still-valid cached policy's, use the cached policy without an HTTPS fetch; a new id means a new policy to fetch. | `TestResolveHappyPath`, `TestResolveCachesUntilMaxAge`, `TestResolveRefetchesWhenIDChanges`, `Example`, `TestResolveExpiryDuringSuccessfulLookup` |
 | MTASTS-CACHE-03 | 3.1, 5.1 | Normative | The absence of a usable TXT record does not by itself remove a cached policy. | `TestResolveRetainsCachedEnforceOnTransientFailure` |
 | MTASTS-CACHE-04 | 10.2 | SHOULD | Prefer `max_age` values as long as is practical. | n/a: advice to Policy Domains on the values they publish; the library caches whatever `max_age` a policy gives. |
 
@@ -103,9 +130,19 @@ with `go run ./internal/checklist`; the format is described in the
 | MTASTS-APPLY-01 | 5 | MUST NOT | Under `enforce`, deliver to a host that fails MX matching or certificate validation, or does not support STARTTLS. | `TestEvaluate`, `TestEvaluateGatesOnPolicyMode` |
 | MTASTS-APPLY-02 | 5 | Normative | Under `testing`, deliver as though there were no validation failure. | `TestEvaluate`, `TestEvaluateGatesOnPolicyMode` |
 | MTASTS-APPLY-03 | 5 | Normative | Under `none`, treat the Policy Domain as though it had no active policy. | `TestEvaluate`, `TestEvaluateGatesOnPolicyMode` |
-| MTASTS-APPLY-04 | 5, 5.1 | MUST NOT | Permanently fail a message refused under `enforce` before checking DNS for a new policy; such failures SHOULD be treated as transient. | `TestEnforceErrorIsTransient` |
+| MTASTS-APPLY-04 | 5 | SHOULD | Treat delivery failures caused by an enforce policy as transient errors and retry later. | `TestEnforceErrorIsTransient` |
 | MTASTS-APPLY-05 | 2 | MUST NOT | Let MTA-STS validation override a failing DANE validation. | n/a: the library does no DANE; Evaluate returning nil means only that MTA-STS does not block, and gives a caller nothing to override DANE with. |
-| MTASTS-APPLY-06 | 5 | Normative | Apply only a valid, non-expired policy. | `TestResolveRetainsCachedEnforceOnTransientFailure`, `TestResolveCachesUntilMaxAge` |
+| MTASTS-APPLY-06 | 5 | Normative | Apply only a valid, non-expired policy. | `TestResolveRetainsCachedEnforceOnTransientFailure`, `TestResolveCachesUntilMaxAge`, `TestResolveExpiryDuringDiscovery`, `TestResolveExpiryDuringSuccessfulLookup` |
+| MTASTS-APPLY-07 | 5, 5.1 | MUST NOT | Permanently fail a message refused under enforce before checking DNS for an updated policy; if none is found, apply the ordinary temporary-failure rules. | n/a: the caller owns queue retries and final bounces; EnforceError.Temporary alone cannot prove a final DNS check. |
+
+## Delegation, updates and removal (§8)
+
+| ID | Section | Level | Requirement | Tests |
+|----|---------|-------|-------------|-------|
+| MTASTS-UPDATE-01 | 8.1 | SHOULD | Keep old policies usable until both endpoints are updated and the TXT TTL has elapsed. | n/a: the Policy Domain controls its policies, MX service and DNS TTLs. |
+| MTASTS-UPDATE-02 | 8.1 | SHOULD | Update the HTTPS policy body before publishing the new TXT id to avoid caching old content under the new id. | n/a: the Policy Domain controls publication order; the resolver sees only the current responses. |
+| MTASTS-DELEGATE-01 | 8.2 | Normative | Policy delegation preserves the original Policy Host and requires its certificate identity, not the provider's Policy Host identity. | `TestDelegatedPolicyKeepsOriginalIdentity` |
+| MTASTS-REMOVE-01 | 8.3 | Normative | A new authenticated none policy opts out before the old policy expires; removing the endpoints alone does not remove a valid cached policy. | `TestResolveAuthenticatedRemoval` |
 
 ## Reporting failures (§6)
 

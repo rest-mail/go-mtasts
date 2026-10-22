@@ -181,9 +181,10 @@ func (r *Resolver) Resolve(ctx context.Context, domain string) (*Policy, error) 
 		return nil, ErrNoPolicy
 	}
 
-	now := r.now()
-
 	txts, err := r.lookupTXT(ctx, TXTName(domain))
+	// DNS and HTTPS can outlast a cached policy. Judge its validity after
+	// each blocking operation, not at the start of this Resolve call.
+	now := r.now()
 	if err != nil {
 		return r.cachedOrNoPolicy(domain, now, err)
 	}
@@ -203,11 +204,13 @@ func (r *Resolver) Resolve(ctx context.Context, domain string) (*Policy, error) 
 	}
 
 	body, err := r.fetchPolicy(ctx, PolicyURL(domain))
+	now = r.now()
 	if err != nil {
 		r.storeFailure(domain, id, now)
 		return r.cachedOrNoPolicy(domain, now, err)
 	}
 	policy, err := ParsePolicy(body)
+	now = r.now()
 	if err != nil {
 		r.storeFailure(domain, id, now)
 		return r.cachedOrNoPolicy(domain, now, err)

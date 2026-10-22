@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rest-mail/go-mtasts/actions/workflows/ci.yml/badge.svg)](https://github.com/rest-mail/go-mtasts/actions/workflows/ci.yml)
 [![Coverage gate: ≥95%](https://img.shields.io/badge/coverage%20gate-%E2%89%A595%25-brightgreen)](COVERAGE.md)
-[![Checklist: 52/73 mapped](https://img.shields.io/badge/checklist-52%2F73%20mapped-blue)](CHECKLIST.md)
+[![Checklist: 54/86 mapped](https://img.shields.io/badge/checklist-54%2F86%20mapped-blue)](CHECKLIST.md)
 [![Go Reference](https://pkg.go.dev/badge/github.com/rest-mail/go-mtasts.svg)](https://pkg.go.dev/github.com/rest-mail/go-mtasts)
 [![Go Report Card](https://goreportcard.com/badge/github.com/rest-mail/go-mtasts)](https://goreportcard.com/report/github.com/rest-mail/go-mtasts)
 
@@ -117,8 +117,8 @@ is refreshed long before a long `max_age` runs out; when discovery fails and a
 cached policy stays in force, `RefreshFailed` (if set) is told, so the caller
 can alert an administrator. A `max_age` of 0 applies the policy without caching
 it. A fetch or parse failure for a given id is negative-cached for `NegativeTTL`
-(default 5 minutes), so a broken or blocked policy host is not re-probed on every
-outbound message (RFC 8461 §3.3); a newly published id is fetched immediately.
+(default 5 minutes after the failed attempt finishes), so a broken or blocked
+policy host is not re-probed on every outbound message (RFC 8461 §3.3); a newly published id is fetched immediately.
 `TXTName` and `PolicyURL` expose the DNS name and URL the resolver derives from a
 domain; a recipient domain that is not a DNS name (an address literal, say) has
 no policy. If you fetch policy files yourself, `ParsePolicy` parses a body in
@@ -169,7 +169,10 @@ purpose are listed, each with a reason, in [COVERAGE.md](COVERAGE.md). The
 coverage badge states this enforced minimum; the measured percentage is in
 each CI run's `RFC proof` log. The checklist badge counts requirements mapped
 to tests over all requirements, including `n/a` rows in the total. CI validates
-the mappings and rejects a stale badge count. These badges describe the
+the mappings and rejects a stale badge count. The current inventory contains
+54 mapped requirements and 32 explicit `n/a` rows, including publisher and
+SMTP transport duties outside this library. The section audit and responsibility
+boundaries are recorded in CHECKLIST.md. These badges describe the
 checked-in contract; the CI badge shows whether verification passed.
 
 The fuzz targets are `FuzzParsePolicy` (any policy body; an accepted policy is valid and

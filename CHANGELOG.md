@@ -15,6 +15,13 @@ cost anything this is a clean break.
 
 ### Added
 
+- Section-by-section RFC 8461 audit scope and 13 new checklist rows:
+  publisher id/update/service duties, SMTP SNI/TLS responsibilities, the final
+  DNS check before a permanent failure, and delegated identity/authenticated
+  removal proofs. Queue and publisher duties are explicitly outside the API.
+- Fake-clock boundary proofs for cache expiry during DNS/HTTPS and positive
+  and negative cache lifetimes after a slow fetch.
+
 - README badges for the enforced ≥95% coverage gate and the checklist's
   mapped/total requirement count. CI checks the count against the validated
   checklist so it cannot silently drift.
@@ -46,6 +53,10 @@ cost anything this is a clean break.
   RFC 8461 §3.2 says to ignore the parameters.
 
 ### Fixed
+
+- Recheck time after DNS and HTTPS operations so discovery cannot return a
+  policy that expired while waiting. Start policy cache and failed-fetch retry
+  lifetimes after the attempt completes, rather than before blocking I/O.
 
 - **The policy fetch names its TLS 1.2 cipher suites.** It offers only
   forward-secret ECDHE suites with AES or ChaCha20 (RFC 7525 §4, RFC 8461
