@@ -18,7 +18,28 @@ import (
 // ErrNoPolicy is returned by Resolver.Resolve when the domain publishes no
 // usable MTA-STS policy. It signals the caller to fall back to ordinary
 // opportunistic-TLS behaviour (fail-open, per RFC 8461 section 5).
+//
+// The error Resolve returns wraps ErrNoPolicy, and with it the reason when
+// discovery found one: ErrNoRecord, ErrPolicyFetch or ErrPolicyInvalid, or a
+// DNS error. errors.Is tells them apart, which is what a TLS-RPT report needs
+// (RFC 8460 §4.3.2.2): a domain without a record does not use MTA-STS, while
+// one whose policy could not be fetched or read is a failure to report.
 var ErrNoPolicy = errors.New("mtasts: no policy")
+
+// The reasons Resolve finds no policy, each wrapped in ErrNoPolicy.
+var (
+	// ErrNoRecord: the domain publishes no valid _mta-sts TXT record, so it
+	// does not use MTA-STS (RFC 8461 §3.1).
+	ErrNoRecord = errors.New("mtasts: no valid _mta-sts TXT record")
+	// ErrPolicyFetch: the domain publishes a record, but its policy could not
+	// be fetched over HTTPS (RFC 8461 §3.3); the error also wraps the fetch's
+	// own, a certificate the fetch could not verify among them (RFC 8460's
+	// sts-policy-fetch-error, or sts-webpki-invalid).
+	ErrPolicyFetch = errors.New("mtasts: the policy could not be fetched")
+	// ErrPolicyInvalid: the policy was fetched but is not a valid policy
+	// (RFC 8461 §3.2; RFC 8460's sts-policy-invalid).
+	ErrPolicyInvalid = errors.New("mtasts: the policy is not valid")
+)
 
 // maxPolicyBody bounds the policy file read to guard against abuse.
 const maxPolicyBody = 64 << 10
@@ -54,9 +75,6 @@ const maxCacheTTL = maxMaxAge * time.Second
 // whole max_age, not just at the moment it runs out.
 const refreshInterval = 24 * time.Hour
 
-// errNoTXTRecord is passed to Resolver.RefreshFailed when the TXT lookup
-// succeeds but finds no valid MTA-STS record.
-var errNoTXTRecord = errors.New("mtasts: no valid _mta-sts TXT record")
 
 // defaultNegativeTTL bounds how often a failed policy fetch/parse for a given
 // version id is retried. RFC 8461 §3.3 recommends limiting retries to no more
@@ -113,11 +131,12 @@ type cacheEntry struct {
 }
 
 // negEntry records that discovery of policy id for a domain failed (fetch or
-// parse) and must not be retried until expiresAt. The id scopes the suppression
-// per RFC 8461 §3.3: a freshly published id is a new policy and is fetched
-// immediately rather than served from a stale failure.
+// parse), and why, and must not be retried until expiresAt. The id scopes the
+// suppression per RFC 8461 §3.3: a freshly published id is a new policy and is
+// fetched immediately rather than served from a stale failure.
 type negEntry struct {
 	id        string
+	err       error
 	expiresAt time.Time
 }
 
@@ -186,11 +205,17 @@ func (r *Resolver) Resolve(ctx context.Context, domain string) (*Policy, error) 
 	// each blocking operation, not at the start of this Resolve call.
 	now := r.now()
 	if err != nil {
-		return r.cachedOrNoPolicy(domain, now, err)
+		// A name that does not exist publishes no record; another DNS
+		// failure says nothing either way.
+		var dnsErr *net.DNSError
+		if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+			err = fmt.Errorf("%w: %w", ErrNoRecord, err)
+		}
+		return r.cachedOrNoPolicy(domain, now, err, true)
 	}
 	id, ok := parseTXTID(txts)
 	if !ok {
-		return r.cachedOrNoPolicy(domain, now, errNoTXTRecord)
+		return r.cachedOrNoPolicy(domain, now, ErrNoRecord, true)
 	}
 
 	if p := r.cached(domain, id, now); p != nil {
@@ -199,21 +224,23 @@ func (r *Resolver) Resolve(ctx context.Context, domain string) (*Policy, error) 
 
 	// Rate-limit re-probing of a policy host that recently failed for this same
 	// id: serve any still-valid cached policy or fail open without a fresh fetch.
-	if r.recentlyFailed(domain, id, now) {
-		return r.cachedOrNoPolicy(domain, now, nil)
+	if failure, ok := r.recentlyFailed(domain, id, now); ok {
+		return r.cachedOrNoPolicy(domain, now, failure, false)
 	}
 
 	body, err := r.fetchPolicy(ctx, PolicyURL(domain))
 	now = r.now()
 	if err != nil {
-		r.storeFailure(domain, id, now)
-		return r.cachedOrNoPolicy(domain, now, err)
+		failure := fmt.Errorf("%w: %w", ErrPolicyFetch, err)
+		r.storeFailure(domain, id, now, failure)
+		return r.cachedOrNoPolicy(domain, now, failure, true)
 	}
 	policy, err := ParsePolicy(body)
 	now = r.now()
 	if err != nil {
-		r.storeFailure(domain, id, now)
-		return r.cachedOrNoPolicy(domain, now, err)
+		failure := fmt.Errorf("%w: %w", ErrPolicyInvalid, err)
+		r.storeFailure(domain, id, now, failure)
+		return r.cachedOrNoPolicy(domain, now, failure, true)
 	}
 
 	r.store(domain, id, policy, now)
@@ -237,41 +264,48 @@ func (r *Resolver) cached(domain, id string, now time.Time) *Policy {
 // any non-expired cached policy regardless of its id — the id governs whether
 // to re-fetch, not whether the cached policy is still valid — and returns
 // ErrNoPolicy only when nothing usable remains in the cache (RFC 8461 §3.1,
-// §3.3). failure is why discovery failed, or nil when no attempt was made (a
-// negative-cached id); a cached policy served after a failure is reported to
-// RefreshFailed unless its mode is "none".
-func (r *Resolver) cachedOrNoPolicy(domain string, now time.Time, failure error) (*Policy, error) {
+// §3.3). failure is why discovery failed, which the ErrNoPolicy returned
+// wraps; attempted is false when no attempt was made this time (a
+// negative-cached id). A cached policy served after a failed attempt is
+// reported to RefreshFailed unless its mode is "none".
+func (r *Resolver) cachedOrNoPolicy(domain string, now time.Time, failure error, attempted bool) (*Policy, error) {
 	r.mu.Lock()
 	e, found := r.cache[domain]
 	r.mu.Unlock()
 	if !found || !now.Before(e.expiresAt) {
-		return nil, ErrNoPolicy
+		if failure == nil {
+			return nil, ErrNoPolicy
+		}
+		return nil, fmt.Errorf("%w: %w", ErrNoPolicy, failure)
 	}
-	if failure != nil && r.RefreshFailed != nil && e.policy.Mode != ModeNone {
+	if attempted && failure != nil && r.RefreshFailed != nil && e.policy.Mode != ModeNone {
 		r.RefreshFailed(domain, e.policy, failure)
 	}
 	return e.policy, nil
 }
 
 // recentlyFailed reports whether a fetch/parse for domain's current id failed
-// within the negative-cache TTL. It is scoped to the id so that a rotated
+// within the negative-cache TTL, and why. It is scoped to the id so that a rotated
 // (newly published) id is never suppressed by the previous id's failure.
-func (r *Resolver) recentlyFailed(domain, id string, now time.Time) bool {
+func (r *Resolver) recentlyFailed(domain, id string, now time.Time) (error, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	e, found := r.negCache[domain]
-	return found && e.id == id && now.Before(e.expiresAt)
+	if found && e.id == id && now.Before(e.expiresAt) {
+		return e.err, true
+	}
+	return nil, false
 }
 
-// storeFailure records that discovery of id for domain failed, suppressing
-// re-fetch of the same id until now+negTTL.
-func (r *Resolver) storeFailure(domain, id string, now time.Time) {
+// storeFailure records that discovery of id for domain failed, and why,
+// suppressing re-fetch of the same id until now+negTTL.
+func (r *Resolver) storeFailure(domain, id string, now time.Time, failure error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.negCache == nil {
 		r.negCache = make(map[string]negEntry)
 	}
-	r.negCache[domain] = negEntry{id: id, expiresAt: now.Add(r.negTTL())}
+	r.negCache[domain] = negEntry{id: id, err: failure, expiresAt: now.Add(r.negTTL())}
 }
 
 // negTTL is the negative-cache lifetime: NegativeTTL when it exceeds the default

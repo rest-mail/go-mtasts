@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"testing"
@@ -160,6 +161,66 @@ func TestResolveFailOpen(t *testing.T) {
 			t.Fatalf("want ErrNoPolicy, got %v", err)
 		}
 	})
+}
+
+// TestResolveSaysWhyThereIsNoPolicy checks that the ErrNoPolicy Resolve
+// returns says why there is none, as a TLS-RPT report needs (RFC 8461 §6, RFC
+// 8460 §4.3.2.2): no record (no such name, or no valid record) is not a
+// failure, while a policy that could not be fetched, or did not parse, is;
+// the fetch's own error stays in the chain, and a retry the negative cache
+// suppresses gives the same reason.
+//
+// checklist: MTASTS-REP-01
+func TestResolveSaysWhyThereIsNoPolicy(t *testing.T) {
+	ctx := context.Background()
+	nxdomain := &net.DNSError{Err: "no such host", Name: TXTName("nx.example"), IsNotFound: true}
+	for name, tc := range map[string]struct {
+		setup func(f *fakeResolver)
+		want  error
+	}{
+		"no such name":    {func(f *fakeResolver) { f.txtErr = nxdomain }, ErrNoRecord},
+		"no valid record": {func(f *fakeResolver) { f.txt[TXTName("example.com")] = []string{"v=STSv2; id=1"} }, ErrNoRecord},
+		"fetch fails": {func(f *fakeResolver) {
+			f.txt[TXTName("example.com")] = []string{"v=STSv1; id=1"}
+			f.fetchErr = errors.New("x509: unknown authority")
+		}, ErrPolicyFetch},
+		"policy not valid": {func(f *fakeResolver) {
+			f.txt[TXTName("example.com")] = []string{"v=STSv1; id=1"}
+			f.policies[PolicyURL("example.com")] = "mode: sometimes"
+		}, ErrPolicyInvalid},
+	} {
+		f := newFakeResolver()
+		tc.setup(f)
+		for attempt := 1; attempt <= 2; attempt++ {
+			_, err := f.Resolve(ctx, "example.com")
+			if !errors.Is(err, ErrNoPolicy) || !errors.Is(err, tc.want) {
+				t.Errorf("%s, attempt %d: %v, want ErrNoPolicy and %v", name, attempt, err, tc.want)
+			}
+			for _, other := range []error{ErrNoRecord, ErrPolicyFetch, ErrPolicyInvalid} {
+				if other != tc.want && errors.Is(err, other) {
+					t.Errorf("%s: %v is also %v", name, err, other)
+				}
+			}
+		}
+		if tc.want == ErrPolicyFetch && f.fetchCount != 1 {
+			t.Errorf("%s: fetched %d times, want once (the retry is suppressed)", name, f.fetchCount)
+		}
+	}
+	f := newFakeResolver()
+	f.txt[TXTName("example.com")] = []string{"v=STSv1; id=1"}
+	f.fetchErr = errors.New("x509: certificate signed by unknown authority")
+	if _, err := f.Resolve(ctx, "example.com"); !errors.Is(err, f.fetchErr) {
+		t.Errorf("the fetch's error is not in the chain: %v", err)
+	}
+	// A DNS failure that is not a missing name is no record and no failure.
+	f = newFakeResolver()
+	f.txtErr = errors.New("SERVFAIL")
+	if _, err := f.Resolve(ctx, "example.com"); !errors.Is(err, ErrNoPolicy) || errors.Is(err, ErrNoRecord) || errors.Is(err, ErrPolicyFetch) {
+		t.Errorf("SERVFAIL: %v", err)
+	}
+	if _, err := f.Resolve(ctx, "not a domain"); err != ErrNoPolicy {
+		t.Errorf("a name that is not a domain: %v", err)
+	}
 }
 
 // TestResolveRetainsCachedEnforceOnTransientFailure asserts the RFC 8461 §3.1 /
@@ -413,11 +474,11 @@ func TestStoreOversizedMaxAgeCachesInsteadOfExpiring(t *testing.T) {
 	// A negative max_age, possible only in a Policy built by hand, caches
 	// nothing.
 	f.store("neg.example", "id1", &Policy{Mode: ModeEnforce, MaxAge: -1}, f.now)
-	if got, _ := f.cachedOrNoPolicy("neg.example", f.now, nil); got != nil {
+	if got, _ := f.cachedOrNoPolicy("neg.example", f.now, nil, false); got != nil {
 		t.Error("a negative max_age was cached")
 	}
 	// The clamped entry must still be valid just shy of the cache cap.
-	if got, _ := f.cachedOrNoPolicy("example.com", f.now.Add(maxCacheTTL-time.Second), nil); got == nil {
+	if got, _ := f.cachedOrNoPolicy("example.com", f.now.Add(maxCacheTTL-time.Second), nil, false); got == nil {
 		t.Fatal("entry expired before the cache cap; TTL was not clamped to maxCacheTTL")
 	}
 }

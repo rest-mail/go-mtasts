@@ -148,7 +148,7 @@ TLS-RPT remain unsupported by owner decision.
 
 | ID | Section | Level | Requirement | Tests |
 |----|---------|-------|-------------|-------|
-| MTASTS-REP-01 | 6 | SHOULD | A sender that implements TLSRPT reports HTTPS fetch failures when a valid TXT record exists. | n/a: the library implements no TLSRPT (see the RFC 8460 section below). |
+| MTASTS-REP-01 | 6 | SHOULD | A sender that implements TLSRPT reports HTTPS fetch failures when a valid TXT record exists. | `TestResolveSaysWhyThereIsNoPolicy` |
 | MTASTS-REP-02 | 6 | SHOULD | A sender that implements TLSRPT reports fetch failures of any kind while a valid cached policy exists, unless its mode is `none`. | n/a: the library implements no TLSRPT; RefreshFailed tells the caller of exactly these failures. |
 | MTASTS-REP-03 | 6 | SHOULD | A sender that implements TLSRPT reports MX hosts without STARTTLS or a valid certificate under the applied policy, unless its mode is `none`. | n/a: the library implements no TLSRPT; Evaluate's EnforceError gives the caller the reason. |
 
@@ -156,7 +156,9 @@ TLS-RPT remain unsupported by owner decision.
 
 The library implements no part of TLS-RPT: it neither discovers reporting
 policies nor writes or sends reports. These items are here so that a reader
-looking for them finds why. REST Mail's server receives TLS-RPT reports itself.
+looking for them finds why. What it gives a reporter is why `Resolve` found no
+policy (MTASTS-REP-01). REST Mail's server sends and receives TLS-RPT reports
+itself.
 
 | ID | Section | Level | Requirement | Tests |
 |----|---------|-------|-------------|-------|

@@ -397,7 +397,7 @@ func TestResolveRefreshFailed(t *testing.T) {
 		if _, err := f.Resolve(ctx, "example.com"); err != nil {
 			t.Fatal(err)
 		}
-		if len(*calls) != 1 || !errors.Is((*calls)[0].err, errNoTXTRecord) {
+		if len(*calls) != 1 || !errors.Is((*calls)[0].err, ErrNoRecord) {
 			t.Errorf("calls = %+v", *calls)
 		}
 	})
@@ -420,7 +420,8 @@ func TestResolveRefreshFailed(t *testing.T) {
 		if _, err := f.Resolve(ctx, "example.com"); err != nil {
 			t.Fatal(err)
 		}
-		if len(*calls) != 2 || (*calls)[0].err != fetchErr || (*calls)[1].err == nil || (*calls)[1].err == fetchErr {
+		if len(*calls) != 2 || !errors.Is((*calls)[0].err, fetchErr) || !errors.Is((*calls)[0].err, ErrPolicyFetch) ||
+			!errors.Is((*calls)[1].err, ErrPolicyInvalid) || errors.Is((*calls)[1].err, fetchErr) {
 			t.Errorf("calls = %+v, want the fetch error then a parse error", *calls)
 		}
 	})
