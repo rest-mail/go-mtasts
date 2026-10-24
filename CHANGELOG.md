@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **`Resolve` says why there is no policy.** The error it returns still
+  wraps `ErrNoPolicy`, and now also the reason: `ErrNoRecord` (no such name,
+  or no valid `_mta-sts` record: the domain does not use MTA-STS),
+  `ErrPolicyFetch` (a record, but the HTTPS fetch failed; the fetch's own
+  error, a certificate it could not verify among them, stays in the chain) or
+  `ErrPolicyInvalid` (the policy did not parse), or a DNS error. A retry the
+  negative cache suppresses gives the same reason. A TLS-RPT reporter needs
+  it (RFC 8461 §6, RFC 8460 §4.3.2.2: `sts-policy-fetch-error`,
+  `sts-webpki-invalid`, `sts-policy-invalid`). `RefreshFailed` gets the same
+  wrapped error.
+
+## [0.3.1] - 2026-10-22
+
+0.3.0 (2026-10-17) shipped all of this except the RFC proof workflow and
+badges (#34, #35), the RFC 7525 cipher suites and MX traversal (#36), and the
+RFC 8461 duty audit and cache-expiry recheck (#37).
+
 go-mtasts now meets the standard of rest-mail/rest-mail-server#374: an RFC
 8461 checklist checked in CI, a 95% coverage gate, fuzzing, the RFC's examples
 as tests, and differential tests of MX matching against foxcpp/go-mtasts.

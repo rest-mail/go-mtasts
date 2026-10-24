@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rest-mail/go-mtasts/actions/workflows/ci.yml/badge.svg)](https://github.com/rest-mail/go-mtasts/actions/workflows/ci.yml)
 [![Coverage gate: ≥95%](https://img.shields.io/badge/coverage%20gate-%E2%89%A595%25-brightgreen)](COVERAGE.md)
-[![Checklist: 54/86 mapped](https://img.shields.io/badge/checklist-54%2F86%20mapped-blue)](CHECKLIST.md)
+[![Checklist: 55/86 mapped](https://img.shields.io/badge/checklist-55%2F86%20mapped-blue)](CHECKLIST.md)
 [![Go Reference](https://pkg.go.dev/badge/github.com/rest-mail/go-mtasts.svg)](https://pkg.go.dev/github.com/rest-mail/go-mtasts)
 [![Go Report Card](https://goreportcard.com/badge/github.com/rest-mail/go-mtasts)](https://goreportcard.com/report/github.com/rest-mail/go-mtasts)
 
@@ -31,7 +31,9 @@ policy never blocks mail.
 - Policy **discovery** with in-memory caching keyed by the TXT-record policy id,
   honouring `max_age` (capped at RFC 8461's one-year maximum).
 - **Fail-open** semantics per RFC 8461 section 5 — a bad record or fetch yields
-  `ErrNoPolicy` so the caller reverts to opportunistic TLS.
+  `ErrNoPolicy` so the caller reverts to opportunistic TLS, with the reason in
+  the chain (`ErrNoRecord`, `ErrPolicyFetch`, `ErrPolicyInvalid`) for a TLS-RPT
+  report.
 - **Enforcement** helper (`Evaluate`) that turns one attempt's observed TLS
   outcome into a deferrable `*EnforceError` under `enforce`.
 - RFC 6125 MX pattern matching (`Policy.MatchesMX`, `Policy.MatchesCert`) — exact
@@ -170,7 +172,7 @@ coverage badge states this enforced minimum; the measured percentage is in
 each CI run's `RFC proof` log. The checklist badge counts requirements mapped
 to tests over all requirements, including `n/a` rows in the total. CI validates
 the mappings and rejects a stale badge count. The current inventory contains
-54 mapped requirements and 32 explicit `n/a` rows, including publisher and
+55 mapped requirements and 31 explicit `n/a` rows, including publisher and
 SMTP transport duties outside this library. The section audit and responsibility
 boundaries are recorded in CHECKLIST.md. These badges describe the
 checked-in contract; the CI badge shows whether verification passed.
