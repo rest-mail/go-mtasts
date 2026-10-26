@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/rest-mail/go-mtasts"
+	"github.com/rest-mail/go-mtasts/pkg/mtasts"
 )
 
 // Example discovers a domain's MTA-STS policy and then judges one delivery

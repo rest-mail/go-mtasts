@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-26
+
+### Changed (breaking)
+
+- The library moves into `pkg/mtasts`. The module path is unchanged
+  (`github.com/rest-mail/go-mtasts`), but the root package is gone: import
+  `github.com/rest-mail/go-mtasts/pkg/mtasts`. The package is still named
+  `mtasts`, and every exported name keeps its name, signature and behaviour,
+  so only the import line changes.
+- The `_mta-sts` TXT record grammar moves to
+  `pkg/mtasts/internal/txtrecord`. It was unexported before and stays
+  internal, so it is not importable.
+
+Every function behaves as it did in v0.4.0.
+
+Migration: replace the import path.
+
+| Before (v0.4) | After (v0.5) |
+|---------------|--------------|
+| `import "github.com/rest-mail/go-mtasts"` | `import "github.com/rest-mail/go-mtasts/pkg/mtasts"` |
+| `mtasts.Policy`, `mtasts.ParsePolicy`, `mtasts.Version`, `mtasts.ModeEnforce`, `mtasts.ModeTesting`, `mtasts.ModeNone` | unchanged, now from `.../pkg/mtasts` |
+| `mtasts.Resolver`, `mtasts.NewResolver`, `mtasts.LookupTXTFunc`, `mtasts.FetchPolicyFunc`, `mtasts.TXTName`, `mtasts.PolicyURL` | unchanged, now from `.../pkg/mtasts` |
+| `mtasts.ErrNoPolicy`, `mtasts.ErrNoRecord`, `mtasts.ErrPolicyFetch`, `mtasts.ErrPolicyInvalid` | unchanged, now from `.../pkg/mtasts` |
+| `mtasts.Fetcher`, `mtasts.HTTPFetch` | unchanged, now from `.../pkg/mtasts` |
+| `mtasts.Evaluate`, `mtasts.EvalInput`, `mtasts.EnforceError` | unchanged, now from `.../pkg/mtasts` |
+
+## [0.4.0] - 2026-10-24
+
 ### Added
 
 - **`Resolve` says why there is no policy.** The error it returns still

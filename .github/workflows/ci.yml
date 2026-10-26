@@ -19,11 +19,11 @@ jobs:
     uses: rest-mail/go-spf/.github/workflows/rfc-verification.yml@7d291c08d310b9c62afc287e75a534a39150fafb
     with:
       packages: '["./..."]'
-      checklist-dirs: '["."]'
+      checklist-dirs: '["./pkg/mtasts", "./pkg/mtasts/internal/txtrecord"]'
       fuzz-targets: >-
-        [{"package":".","target":"FuzzParsePolicy"},
-         {"package":".","target":"FuzzParseTXTRecord"},
-         {"package":".","target":"FuzzMatchesMX"}]
+        [{"package":"./pkg/mtasts","target":"FuzzParsePolicy"},
+         {"package":"./pkg/mtasts/internal/txtrecord","target":"FuzzParseTXTRecord"},
+         {"package":"./pkg/mtasts","target":"FuzzMatchesMX"}]
 
   fixtures:
     name: Workflow fixtures

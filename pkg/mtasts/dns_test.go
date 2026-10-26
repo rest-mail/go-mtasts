@@ -7,6 +7,8 @@ import (
 	"net"
 	"strings"
 	"testing"
+
+	"github.com/rest-mail/go-mtasts/pkg/mtasts/internal/txtrecord"
 )
 
 // dnsName encodes a domain name as DNS labels.
@@ -109,8 +111,8 @@ func TestDefaultResolverTXT(t *testing.T) {
 			if err != nil || len(txts) != 1 || txts[0] != "v=STSv1; id=20240101Z" {
 				t.Fatalf("LookupTXT = (%q, %v), want the one record joined", txts, err)
 			}
-			if id, ok := parseTXTID(txts); !ok || id != "20240101Z" {
-				t.Errorf("parseTXTID = (%q, %v)", id, ok)
+			if id, ok := txtrecord.ID(txts); !ok || id != "20240101Z" {
+				t.Errorf("txtrecord.ID = (%q, %v)", id, ok)
 			}
 		})
 	}

@@ -2,22 +2,47 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
 
 const tableHeader = "| ID | Section | Level | Requirement | Tests |\n|----|---------|-------|-------------|-------|\n"
 
-// TestReadmeChecklistBadge uses the checker itself so n/a requirements are
-// counted in the denominator, and only validated test mappings in the numerator.
+// ciChecklistDirs returns the package directories CI passes the checklist
+// command (the checklist-dirs input in ci.yml), relative to root.
+func ciChecklistDirs(t *testing.T, root string) []string {
+	t.Helper()
+	ci, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^\s+checklist-dirs: '(.*)'$`).FindSubmatch(ci)
+	if m == nil {
+		t.Fatal("ci.yml has no checklist-dirs input")
+	}
+	var dirs []string
+	if err := json.Unmarshal(m[1], &dirs); err != nil || len(dirs) == 0 {
+		t.Fatalf("ci.yml checklist-dirs %s: %v", m[1], err)
+	}
+	for i, d := range dirs {
+		dirs[i] = filepath.Join(root, filepath.FromSlash(d))
+	}
+	return dirs
+}
+
+// TestReadmeChecklistBadge uses the checker itself, on the directories CI
+// checks, so n/a requirements are counted in the denominator, and only
+// validated test mappings in the numerator.
 func TestReadmeChecklistBadge(t *testing.T) {
 	root := filepath.Join("..", "..")
 	file := filepath.Join(root, "CHECKLIST.md")
 	var out bytes.Buffer
-	if code := run([]string{"-file", file, root}, &out, &out); code != 0 {
+	if code := run(append([]string{"-file", file}, ciChecklistDirs(t, root)...), &out, &out); code != 0 {
 		t.Fatalf("invalid repository checklist (exit %d):\n%s", code, out.String())
 	}
 	items, err := parseChecklist(file, func(format string, args ...any) {

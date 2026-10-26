@@ -12,8 +12,10 @@ listed with explicit responsibility boundaries. A section number alone is RFC 84
 
 An item that does not apply to a library (because it is the sending MTA's
 delivery loop, say) says "n/a" and why. CI checks this file against the tests
-with `go run ./internal/checklist`; the format is described in the
-[README](README.md#the-rfc-checklist).
+in [`pkg/mtasts`](pkg/mtasts) and
+[`pkg/mtasts/internal/txtrecord`](pkg/mtasts/internal/txtrecord) with
+`go run ./internal/checklist pkg/mtasts pkg/mtasts/internal/txtrecord`; the
+format is described in the [README](README.md#the-rfc-checklist).
 
 ## Audit scope
 
