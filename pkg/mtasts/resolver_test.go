@@ -50,8 +50,7 @@ func newFakeResolver() *fakeResolver {
 			}
 			return []byte(body), nil
 		},
-		Now:   func() time.Time { return f.now },
-		cache: map[string]cacheEntry{},
+		Now: func() time.Time { return f.now },
 	}
 	return f
 }
@@ -122,6 +121,11 @@ func TestResolveRefetchesWhenIDChanges(t *testing.T) {
 func TestResolveFailOpen(t *testing.T) {
 	t.Run("no TXT record", func(t *testing.T) {
 		f := newFakeResolver()
+		// A fallback without a discovery error still reports the absence of
+		// a policy; this path has no failure reason to wrap.
+		if p, err := f.cachedOrNoPolicy("nopolicy.com", f.now, nil, false); p != nil || err != ErrNoPolicy {
+			t.Fatalf("empty cache without a failure: got (%v, %v), want (nil, ErrNoPolicy)", p, err)
+		}
 		if _, err := f.Resolve(context.Background(), "nopolicy.com"); !errors.Is(err, ErrNoPolicy) {
 			t.Fatalf("want ErrNoPolicy, got %v", err)
 		}
@@ -449,36 +453,6 @@ func TestResolveNegativeTTLConfigurable(t *testing.T) {
 	}
 	if f.fetchCount != 2 {
 		t.Fatalf("after the configured TTL a single retry is expected; got %d fetches", f.fetchCount)
-	}
-}
-
-// TestStoreOversizedMaxAgeCachesInsteadOfExpiring is the resolver-side guard for
-// issue #7. A policy whose max_age overflows time.Duration when multiplied by a
-// second (> 9223372036) must still yield a future expiry — clamped to the cache
-// cap — rather than a negative TTL that makes the entry expire immediately and
-// forces a re-fetch on every outbound message (defeating the cache-based
-// downgrade protection of RFC 8461 §10.2).
-//
-// checklist: MTASTS-CACHE-01
-func TestStoreOversizedMaxAgeCachesInsteadOfExpiring(t *testing.T) {
-	f := newFakeResolver()
-	// 9223372037 * 1e9 ns overflows int64, wrapping to a negative Duration on
-	// unfixed code.
-	policy := &Policy{Version: Version, Mode: ModeEnforce, MX: []string{"mail.example.com"}, MaxAge: 9223372037}
-	f.store("example.com", "id1", policy, f.now)
-
-	if got := f.cached("example.com", "id1", f.now); got == nil {
-		t.Fatal("oversized max_age produced an already-expired entry (negative TTL); want cached policy")
-	}
-	// A negative max_age, possible only in a Policy built by hand, caches
-	// nothing.
-	f.store("neg.example", "id1", &Policy{Mode: ModeEnforce, MaxAge: -1}, f.now)
-	if got, _ := f.cachedOrNoPolicy("neg.example", f.now, nil, false); got != nil {
-		t.Error("a negative max_age was cached")
-	}
-	// The clamped entry must still be valid just shy of the cache cap.
-	if got, _ := f.cachedOrNoPolicy("example.com", f.now.Add(maxCacheTTL-time.Second), nil, false); got == nil {
-		t.Fatal("entry expired before the cache cap; TTL was not clamped to maxCacheTTL")
 	}
 }
 

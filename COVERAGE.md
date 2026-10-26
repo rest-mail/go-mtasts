@@ -1,6 +1,8 @@
 # Coverage exceptions
 
-CI fails when statement coverage of `./...` falls below 95%. These are the
+CI measures statement coverage across `./...` with `-coverpkg=./...` and fails
+when the total falls below 95%. Tests in the public package also cover the
+internal domain-name, policy grammar, cache and TXT-record packages. These are the
 statements left uncovered on purpose, each with the reason. Add an entry here
 whenever you leave a statement uncovered.
 

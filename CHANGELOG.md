@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-26
+
+### Changed
+
+- Split domain-name helpers, policy-file grammar and cache internals into
+  focused `pkg/mtasts/internal` packages. The public API is unchanged.
+- Pin CI's shared RFC proof to the revision that measures statement coverage
+  across the selected packages with `-coverpkg`, keeping the 95% gate.
+
 ## [0.5.0] - 2026-10-26
 
 ### Changed (breaking)

@@ -40,6 +40,17 @@ func ciChecklistDirs(t *testing.T, root string) []string {
 // validated test mappings in the numerator.
 func TestReadmeChecklistBadge(t *testing.T) {
 	root := filepath.Join("..", "..")
+	// This immutable producer counts all selected packages with -coverpkg and
+	// rejects totals outside 95..100; re-audit the gate when changing the pin.
+	const auditedProducer = "rest-mail/go-spf/.github/workflows/rfc-verification.yml@2409e76ef1e501e0222e6c25a0c7a6202de1051b"
+	ci, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	producer := regexp.MustCompile(`(?m)^    uses: (\S+)\s*$`).FindSubmatch(ci)
+	if len(producer) != 2 || string(producer[1]) != auditedProducer {
+		t.Fatalf("coverage gate needs re-audit: producer %q, audited %q", producer, auditedProducer)
+	}
 	file := filepath.Join(root, "CHECKLIST.md")
 	var out bytes.Buffer
 	if code := run(append([]string{"-file", file}, ciChecklistDirs(t, root)...), &out, &out); code != 0 {
@@ -60,6 +71,10 @@ func TestReadmeChecklistBadge(t *testing.T) {
 	readme, err := os.ReadFile(filepath.Join(root, "README.md"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	const coverageBadge = "[![Coverage gate: ≥95%](https://img.shields.io/badge/coverage%20gate-%E2%89%A595%25-brightgreen)](COVERAGE.md)"
+	if !strings.Contains(string(readme), coverageBadge) {
+		t.Errorf("stale or missing README coverage badge; want %s", coverageBadge)
 	}
 	want := fmt.Sprintf("[![Checklist: %d/%d mapped](https://img.shields.io/badge/checklist-%d%%2F%d%%20mapped-blue)](CHECKLIST.md)",
 		mapped, len(items), mapped, len(items))

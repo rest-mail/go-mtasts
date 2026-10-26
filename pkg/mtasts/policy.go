@@ -2,9 +2,9 @@ package mtasts
 
 import (
 	"crypto/x509"
-	"fmt"
-	"math"
-	"strings"
+
+	"github.com/rest-mail/go-mtasts/pkg/mtasts/internal/domainname"
+	"github.com/rest-mail/go-mtasts/pkg/mtasts/internal/policygrammar"
 )
 
 // Policy modes (RFC 8461 section 5).
@@ -16,12 +16,6 @@ const (
 
 // Version is the only MTA-STS policy version defined by RFC 8461.
 const Version = "STSv1"
-
-// maxMaxAge is the largest max_age RFC 8461 §3.2 permits: a non-negative
-// integer number of seconds of at most ten digits, no larger than 31557600
-// (~1 year). A value outside that range makes the policy invalid rather than
-// yielding a bogus cache TTL.
-const maxMaxAge = 31557600
 
 // Policy is a parsed MTA-STS policy file.
 type Policy struct {
@@ -40,112 +34,8 @@ type Policy struct {
 // form, optionally behind a "*." wildcard (RFC 8461 §3.2), and at least one mx
 // pattern must be present unless the mode is "none".
 func ParsePolicy(body []byte) (*Policy, error) {
-	p := &Policy{}
-	// RFC 8461 section 3.2: for any non-repeated field — every field except
-	// "mx" — "all entries except for the first SHALL be ignored." We track the
-	// first occurrence of each single-valued key and drop later duplicates,
-	// including a later invalid max_age (which must not reject the policy).
-	// last-wins would let a trailing injected line silently change enforcement.
-	var sawVersion, sawMode, sawMaxAge bool
-	for _, line := range strings.Split(string(body), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		key, value, ok := strings.Cut(line, ":")
-		if !ok {
-			continue
-		}
-		key = strings.TrimSpace(key)
-		value = strings.TrimSpace(value)
-		switch key {
-		case "version":
-			if sawVersion {
-				continue
-			}
-			p.Version = value
-			sawVersion = true
-		case "mode":
-			if sawMode {
-				continue
-			}
-			p.Mode = value
-			sawMode = true
-		case "mx":
-			// RFC 8461 §3.2: sts-policy-mx-value = ["*."] Domain, and an
-			// internationalized name MUST be given as its A-label. A pattern
-			// that is not one cannot be matched as the publisher meant, so the
-			// policy is invalid rather than enforced with a pattern missing.
-			if !validMXPattern(value) {
-				return nil, fmt.Errorf("mtasts: invalid mx pattern %q", value)
-			}
-			p.MX = append(p.MX, value)
-		case "max_age":
-			if sawMaxAge {
-				continue
-			}
-			// sts-policy-max-age-value = 1*10(DIGIT).
-			n, err := parseUint(value)
-			if err == nil && len(value) > 10 {
-				err = fmt.Errorf("more than 10 digits")
-			}
-			if err != nil {
-				return nil, fmt.Errorf("mtasts: invalid max_age %q: %w", value, err)
-			}
-			p.MaxAge = n
-			sawMaxAge = true
-		}
-	}
-
-	if p.Version != Version {
-		return nil, fmt.Errorf("mtasts: unsupported version %q", p.Version)
-	}
-	switch p.Mode {
-	case ModeEnforce, ModeTesting, ModeNone:
-	default:
-		return nil, fmt.Errorf("mtasts: invalid mode %q", p.Mode)
-	}
-	if !sawMaxAge {
-		return nil, fmt.Errorf("mtasts: missing max_age")
-	}
-	// RFC 8461 §3.2: max_age is a non-negative integer, at most 31557600. A
-	// larger value makes the policy invalid; accepting it would produce a wildly
-	// wrong cache TTL. Zero is valid: the policy applies now and is not cached.
-	if p.MaxAge > maxMaxAge {
-		return nil, fmt.Errorf("mtasts: max_age %d out of range (RFC 8461 §3.2 allows 0..%d)", p.MaxAge, maxMaxAge)
-	}
-	if p.Mode != ModeNone && len(p.MX) == 0 {
-		return nil, fmt.Errorf("mtasts: mode %q requires at least one mx", p.Mode)
-	}
-	return p, nil
-}
-
-// parseUint parses a non-negative base-10 integer, rejecting empty input, stray
-// non-digit characters (fmt.Sscanf would silently accept "123abc"), and values
-// that overflow int. The unbounded accumulator would otherwise wrap to a
-// negative or bogus number — the root of the negative cache-TTL bug in issue #7
-// where a huge max_age silently produced an already-expired policy.
-func parseUint(s string) (int, error) {
-	if s == "" {
-		return 0, fmt.Errorf("empty")
-	}
-	const cutoff = math.MaxInt / 10
-	n := 0
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return 0, fmt.Errorf("non-digit %q", r)
-		}
-		if n > cutoff {
-			return 0, fmt.Errorf("value overflows int")
-		}
-		n *= 10
-		d := int(r - '0')
-		if n > math.MaxInt-d {
-			return 0, fmt.Errorf("value overflows int")
-		}
-		n += d
-	}
-	return n, nil
+	p, err := policygrammar.Parse(body)
+	return (*Policy)(p), err
 }
 
 // MatchesMX reports whether a concrete MX hostname is named by the policy.
@@ -160,16 +50,7 @@ func (p *Policy) MatchesMX(host string) bool {
 	if p == nil {
 		return false
 	}
-	if !validDomain(host) {
-		return false
-	}
-	host = normalizeHost(host)
-	for _, pattern := range p.MX {
-		if validMXPattern(pattern) && hostMatchesPattern(host, normalizeHost(pattern)) {
-			return true
-		}
-	}
-	return false
+	return domainname.MatchesMX(p.MX, host)
 }
 
 // MatchesCert reports whether any DNS-ID presented by cert is named by the
@@ -190,103 +71,12 @@ func (p *Policy) MatchesCert(cert *x509.Certificate) bool {
 		return false
 	}
 	for _, name := range cert.DNSNames {
-		name = normalizeHost(name)
+		name = domainname.NormalizeHost(name)
 		for _, pattern := range p.MX {
-			if certNameMatchesPattern(name, normalizeHost(pattern)) {
+			if domainname.CertNameMatchesPattern(name, domainname.NormalizeHost(pattern)) {
 				return true
 			}
 		}
 	}
 	return false
-}
-
-// normalizeHost lower-cases a hostname and strips a trailing root dot.
-func normalizeHost(h string) string {
-	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h)), ".")
-}
-
-// hostMatchesPattern matches a concrete host against a policy pattern that may
-// carry a single leading wildcard label.
-//
-// Matching is per label, not per dot: host and pattern must have the same
-// number of labels. A leading "*" label matches any single non-empty label
-// ("*.example.com" matches "mail.example.com" but neither the bare
-// "example.com" — no leading label — nor "a.b.example.com" — two labels — nor
-// ".example.com" — an empty leading label). Every remaining label must match
-// exactly. Callers pass already-normalized (lower-cased, root-dot-trimmed)
-// names, so the label comparison is effectively case-insensitive.
-func hostMatchesPattern(host, pattern string) bool {
-	if host == "" || pattern == "" {
-		return false
-	}
-	hostLabels := strings.Split(host, ".")
-	patLabels := strings.Split(pattern, ".")
-	if len(hostLabels) != len(patLabels) {
-		return false
-	}
-	for i, pl := range patLabels {
-		hl := hostLabels[i]
-		if i == 0 && pl == "*" {
-			// A wildcard covers exactly one label, which must be non-empty.
-			if hl == "" {
-				return false
-			}
-			continue
-		}
-		if pl != hl {
-			return false
-		}
-	}
-	return true
-}
-
-// certNameMatchesPattern matches a certificate identity (which may itself be a
-// wildcard) against a policy pattern (which may also be a wildcard).
-func certNameMatchesPattern(certName, pattern string) bool {
-	if certName == pattern {
-		return true
-	}
-	// Concrete cert name covered by a wildcard policy pattern.
-	if strings.HasPrefix(pattern, "*.") && !strings.HasPrefix(certName, "*.") {
-		return hostMatchesPattern(certName, pattern)
-	}
-	// Wildcard cert name covering a concrete policy pattern.
-	if strings.HasPrefix(certName, "*.") && !strings.HasPrefix(pattern, "*.") {
-		return hostMatchesPattern(pattern, certName)
-	}
-	return false
-}
-
-// validMXPattern reports whether s is an mx pattern RFC 8461 §3.2 allows:
-// ["*."] Domain, where Domain is an RFC 5321 domain name. A trailing root dot
-// is read as the absolute form of the same name, as MatchesMX reads it.
-func validMXPattern(s string) bool {
-	return validDomain(strings.TrimPrefix(s, "*."))
-}
-
-// validDomain reports whether s is an RFC 5321 §4.1.2 Domain: dot-separated
-// labels of letters, digits and hyphens, each starting and ending with a
-// letter or digit, at most 63 octets each and 253 in all, optionally followed
-// by one root dot. Non-ASCII (a U-label) is refused: RFC 8461 wants A-labels.
-func validDomain(s string) bool {
-	s = strings.TrimSuffix(s, ".")
-	if s == "" || len(s) > 253 {
-		return false
-	}
-	for _, label := range strings.Split(s, ".") {
-		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
-			return false
-		}
-		for i := 0; i < len(label); i++ {
-			c := label[i]
-			if !isAlnum(c) && c != '-' {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func isAlnum(c byte) bool {
-	return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9'
 }

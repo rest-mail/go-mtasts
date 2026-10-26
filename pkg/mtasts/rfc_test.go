@@ -251,7 +251,7 @@ func TestResolveRefreshesDaily(t *testing.T) {
 	if _, err := f.Resolve(ctx, "example.com"); err != nil {
 		t.Fatal(err)
 	}
-	f.now = f.now.Add(refreshInterval - time.Second)
+	f.now = f.now.Add(24*time.Hour - time.Second)
 	if _, err := f.Resolve(ctx, "example.com"); err != nil || f.fetchCount != 1 {
 		t.Fatalf("within a day: err %v, fetches %d; want the cached policy and 1 fetch", err, f.fetchCount)
 	}
@@ -259,7 +259,7 @@ func TestResolveRefreshesDaily(t *testing.T) {
 	if _, err := f.Resolve(ctx, "example.com"); err != nil || f.fetchCount != 2 {
 		t.Fatalf("after a day: err %v, fetches %d; want a refresh (2 fetches)", err, f.fetchCount)
 	}
-	f.now = f.now.Add(refreshInterval)
+	f.now = f.now.Add(24 * time.Hour)
 	f.fetchErr = errors.New("policy host down")
 	p, err := f.Resolve(ctx, "example.com")
 	if err != nil || p.Mode != ModeEnforce || f.fetchCount != 3 {
