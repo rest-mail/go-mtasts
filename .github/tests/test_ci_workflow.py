@@ -8,170 +8,255 @@ job needs nothing beyond the runner's Python.
 Set RFC_PRODUCER_WORKFLOW to a copy of rfc-verification.yml at the pinned
 commit to also run the producer's own input validation on these inputs.
 """
+
 import contextlib
 import io
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
 import textwrap
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
-CALLER = (ROOT / '.github/workflows/ci.yml').read_text()
-PIN = '7d291c08d310b9c62afc287e75a534a39150fafb'
-PRODUCER = 'rest-mail/go-spf/.github/workflows/rfc-verification.yml@' + PIN
+CALLER = (ROOT / ".github/workflows/ci.yml").read_text()
+PIN = "7d291c08d310b9c62afc287e75a534a39150fafb"
+PRODUCER = "rest-mail/go-spf/.github/workflows/rfc-verification.yml@" + PIN
+# The packages whose tests name checklist rows, and each fuzz target with the
+# package that declares it.
+CHECKLIST_DIRS = ["./pkg/mtasts", "./pkg/mtasts/internal/txtrecord"]
+FUZZ_TARGETS = [
+    ("./pkg/mtasts", "FuzzParsePolicy"),
+    ("./pkg/mtasts/internal/txtrecord", "FuzzParseTXTRecord"),
+    ("./pkg/mtasts", "FuzzMatchesMX"),
+]
 
 
 def jobs():
-    body = CALLER.split('\njobs:\n', 1)[1]
-    return re.findall(r'^  ([A-Za-z0-9_-]+):\s*$', body, re.M)
+    body = CALLER.split("\njobs:\n", 1)[1]
+    return re.findall(r"^  ([A-Za-z0-9_-]+):\s*$", body, re.MULTILINE)
 
 
 def job(name):
-    body = CALLER.split('\njobs:\n', 1)[1]
-    return re.split(r'^  [A-Za-z0-9_-]+:\s*$', body, flags=re.M)[jobs().index(name) + 1]
+    body = CALLER.split("\njobs:\n", 1)[1]
+    return re.split(r"^  [A-Za-z0-9_-]+:\s*$", body, flags=re.MULTILINE)[
+        jobs().index(name) + 1
+    ]
 
 
 def quoted_input(name):
-    match = re.search(r"^      " + re.escape(name) + r": '([^']*)'\s*$", job('rfc'), re.M)
+    match = re.search(
+        r"^      " + re.escape(name) + r": '([^']*)'\s*$", job("rfc"), re.MULTILINE
+    )
     return json.loads(match[1])
 
 
 def folded_input(name):
-    lines = job('rfc').splitlines()
-    start = lines.index('      ' + name + ': >-')
+    lines = job("rfc").splitlines()
+    start = lines.index("      " + name + ": >-")
     block = []
-    for line in lines[start + 1:]:
-        if not line.startswith('        '):
+    for line in lines[start + 1 :]:
+        if not line.startswith("        "):
             break
         block.append(line.strip())
-    return json.loads(' '.join(block))
+    return json.loads(" ".join(block))
 
 
 def inputs():
     return {
-        'RFC_PACKAGES': json.dumps(quoted_input('packages')),
-        'RFC_CHECKLIST_DIRS': json.dumps(quoted_input('checklist-dirs')),
-        'RFC_FUZZ_TARGETS': json.dumps(folded_input('fuzz-targets')),
+        "RFC_PACKAGES": json.dumps(quoted_input("packages")),
+        "RFC_CHECKLIST_DIRS": json.dumps(quoted_input("checklist-dirs")),
+        "RFC_FUZZ_TARGETS": json.dumps(folded_input("fuzz-targets")),
     }
 
 
 def repository_fuzz_targets():
     found = []
-    for path in sorted(ROOT.rglob('*_test.go')):
+    for path in sorted(ROOT.rglob("*_test.go")):
         relative = path.relative_to(ROOT)
-        if relative.parts[0].startswith('.') or 'testdata' in relative.parts:
+        if relative.parts[0].startswith(".") or "testdata" in relative.parts:
             continue
-        package = '.' if relative.parent == Path('.') else './' + relative.parent.as_posix()
-        for target in re.findall(r'^func (Fuzz\w*)\(\w+ \*testing\.F\)', path.read_text(), re.M):
-            found.append({'package': package, 'target': target})
+        package = (
+            "." if relative.parent == Path(".") else "./" + relative.parent.as_posix()
+        )
+        for target in re.findall(
+            r"^func (Fuzz\w*)\(\w+ \*testing\.F\)", path.read_text(), re.MULTILINE
+        ):
+            found.append({"package": package, "target": target})
     return found
 
 
 class CallerFixtures(unittest.TestCase):
     def test_coverage_badge_describes_the_pinned_gate(self):
-        readme = (ROOT / 'README.md').read_text()
-        self.assertIn('[![Coverage gate: ≥95%]('
-                      'https://img.shields.io/badge/coverage%20gate-%E2%89%A595%25-brightgreen)]'
-                      '(COVERAGE.md)', readme)
+        readme = (ROOT / "README.md").read_text()
+        self.assertIn(
+            "[![Coverage gate: ≥95%]("
+            "https://img.shields.io/badge/coverage%20gate-%E2%89%A595%25-brightgreen)]"
+            "(COVERAGE.md)",
+            readme,
+        )
         # This audited pin enforces 95..100%; changing it requires reviewing
         # the gate as well as the workflow contract below.
-        self.assertIn(PRODUCER, job('rfc'))
+        self.assertIn(PRODUCER, job("rfc"))
 
     def test_proof_is_the_pinned_go_spf_workflow(self):
-        self.assertEqual(re.findall(r'^    uses: (\S+)\s*$', job('rfc'), re.M), [PRODUCER])
-        workflows = [ref for ref in re.findall(r'uses:\s*(\S+)', CALLER) if '/.github/workflows/' in ref]
+        self.assertEqual(
+            re.findall(r"^    uses: (\S+)\s*$", job("rfc"), re.MULTILINE), [PRODUCER]
+        )
+        workflows = [
+            ref
+            for ref in re.findall(r"uses:\s*(\S+)", CALLER)
+            if "/.github/workflows/" in ref
+        ]
         self.assertEqual(workflows, [PRODUCER])
-        self.assertNotIn('secrets:', CALLER)
-        self.assertEqual(re.findall(r'^permissions:\n((?:  .*\n)+)', CALLER, re.M), ['  contents: read\n'])
-        self.assertEqual(CALLER.count('permissions:'), 1)
+        self.assertNotIn("secrets:", CALLER)
+        self.assertEqual(
+            re.findall(r"^permissions:\n((?:  .*\n)+)", CALLER, re.MULTILINE),
+            ["  contents: read\n"],
+        )
+        self.assertEqual(CALLER.count("permissions:"), 1)
 
     def test_events_are_unchanged(self):
-        self.assertIn('on:\n  push:\n    branches: [main]\n  pull_request:\n    branches: [main]\n', CALLER)
+        self.assertIn(
+            "on:\n  push:\n    branches: [main]\n  pull_request:\n    branches: [main]\n",
+            CALLER,
+        )
 
     def test_packages_and_checklist_dirs(self):
-        self.assertEqual(quoted_input('packages'), ['./...'])
-        self.assertEqual(quoted_input('checklist-dirs'), ['.'])
+        self.assertEqual(quoted_input("packages"), ["./..."])
+        self.assertEqual(quoted_input("checklist-dirs"), CHECKLIST_DIRS)
 
     def test_fuzz_targets_are_exactly_the_repository_targets(self):
-        targets = folded_input('fuzz-targets')
-        self.assertEqual(targets, [{'package': '.', 'target': name} for name in
-                                   ['FuzzParsePolicy', 'FuzzParseTXTRecord', 'FuzzMatchesMX']])
-        key = lambda item: (item['package'], item['target'])
-        self.assertEqual(sorted(targets, key=key), sorted(repository_fuzz_targets(), key=key))
+        targets = folded_input("fuzz-targets")
+        self.assertEqual(
+            targets,
+            [{"package": package, "target": name} for package, name in FUZZ_TARGETS],
+        )
+        key = lambda item: (item["package"], item["target"])
+        self.assertEqual(
+            sorted(targets, key=key), sorted(repository_fuzz_targets(), key=key)
+        )
 
     def test_required_context_needs_every_other_job(self):
-        self.assertEqual(jobs(), ['rfc', 'fixtures', 'build'])
-        build = job('build')
-        self.assertIn('    name: Build & Test\n', build)
-        self.assertIn('    needs: [rfc, fixtures]\n', build)
-        self.assertIn('    if: ${{ always() }}\n', build)
-        self.assertIn('RFC_RESULT: ${{ needs.rfc.result }}', build)
-        self.assertIn('FIXTURE_RESULT: ${{ needs.fixtures.result }}', build)
-        self.assertNotIn('continue-on-error', CALLER)
+        self.assertEqual(jobs(), ["rfc", "fixtures", "build"])
+        build = job("build")
+        self.assertIn("    name: Build & Test\n", build)
+        self.assertIn("    needs: [rfc, fixtures]\n", build)
+        self.assertIn("    if: ${{ always() }}\n", build)
+        self.assertIn("RFC_RESULT: ${{ needs.rfc.result }}", build)
+        self.assertIn("FIXTURE_RESULT: ${{ needs.fixtures.result }}", build)
+        self.assertNotIn("continue-on-error", CALLER)
 
     def test_required_verdict_fails_closed(self):
-        command = next(line.strip().removeprefix('run: ') for line in job('build').splitlines()
-                       if line.strip().startswith('run: test '))
-        outcomes = ['success', 'failure', 'cancelled', 'skipped', '', None]
+        command = next(
+            line.strip().removeprefix("run: ")
+            for line in job("build").splitlines()
+            if line.strip().startswith("run: test ")
+        )
+        outcomes = ["success", "failure", "cancelled", "skipped", "", None]
         for rfc in outcomes:
             for fixtures in outcomes:
-                env = {k: v for k, v in os.environ.items()
-                       if k not in ('RFC_RESULT', 'FIXTURE_RESULT')}
-                env.update({k: v for k, v in [('RFC_RESULT', rfc), ('FIXTURE_RESULT', fixtures)]
-                            if v is not None})
-                result = subprocess.run(['sh', '-c', command], env=env, check=False)
+                env = {
+                    k: v
+                    for k, v in os.environ.items()
+                    if k not in ("RFC_RESULT", "FIXTURE_RESULT")
+                }
+                env.update(
+                    {
+                        k: v
+                        for k, v in [("RFC_RESULT", rfc), ("FIXTURE_RESULT", fixtures)]
+                        if v is not None
+                    }
+                )
+                result = subprocess.run(["sh", "-c", command], env=env, check=False)
                 with self.subTest(rfc=rfc, fixtures=fixtures):
-                    self.assertEqual(result.returncode == 0, rfc == fixtures == 'success')
+                    self.assertEqual(
+                        result.returncode == 0, rfc == fixtures == "success"
+                    )
 
 
-@unittest.skipUnless(os.environ.get('RFC_PRODUCER_WORKFLOW'), 'needs the pinned producer workflow')
+@unittest.skipUnless(
+    os.environ.get("RFC_PRODUCER_WORKFLOW"), "needs the pinned producer workflow"
+)
 class ProducerContractFixtures(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        text = Path(os.environ['RFC_PRODUCER_WORKFLOW']).read_text()
-        cls.declared = re.findall(r'^      ([a-z-]+):\n        description:', text, re.M)
-        source = textwrap.dedent(text.split('# BEGIN RFC PROOF\n', 1)[1]
-                                 .split('          # END RFC PROOF', 1)[0])
-        cls.proof = {'__name__': 'rfc_proof_fixture'}
-        exec(compile(source, os.environ['RFC_PRODUCER_WORKFLOW'], 'exec'), cls.proof)
+        text = Path(os.environ["RFC_PRODUCER_WORKFLOW"]).read_text()
+        cls.declared = re.findall(
+            r"^      ([a-z-]+):\n        description:", text, re.MULTILINE
+        )
+        source = textwrap.dedent(
+            text.split("# BEGIN RFC PROOF\n", 1)[1].split(
+                "          # END RFC PROOF", 1
+            )[0]
+        )
+        cls.proof = {"__name__": "rfc_proof_fixture"}
+        # The proof is the pinned producer's own code, read from the copy the
+        # caller supplies; running it is the point of this fixture.
+        exec(compile(source, os.environ["RFC_PRODUCER_WORKFLOW"], "exec"), cls.proof)  # noqa: S102
 
     def test_caller_passes_only_declared_inputs(self):
-        passed = re.findall(r'^      ([a-z-]+):', job('rfc'), re.M)
+        passed = re.findall(r"^      ([a-z-]+):", job("rfc"), re.MULTILINE)
         self.assertEqual(sorted(passed), sorted(self.declared))
 
     def test_coverage_badge_matches_the_producer_threshold(self):
-        for total in ['0', '94.9', '100.1']:
+        for total in ["0", "94.9", "100.1"]:
             with self.subTest(total=total), self.assertRaises(ValueError):
-                self.proof['coverage_total'](f'total: (statements) {total}%\n')
-        for total in ['95', '95.0', '99.8', '100']:
+                self.proof["coverage_total"](f"total: (statements) {total}%\n")
+        for total in ["95", "95.0", "99.8", "100"]:
             with self.subTest(total=total), contextlib.redirect_stdout(io.StringIO()):
-                self.proof['coverage_total'](f'total: (statements) {total}%\n')
+                self.proof["coverage_total"](f"total: (statements) {total}%\n")
 
     def test_producer_accepts_inputs_and_runs_every_proof(self):
         calls = []
 
         def go(*args, **kwargs):
             calls.append(args)
-            if args[:2] == ('test', '-list=^Fuzz'):
-                return '\n'.join(item['target'] for item in repository_fuzz_targets()) + '\n'
-            if args[:2] == ('tool', 'cover'):
-                return 'total: (statements) 100.0%\n'
+            if args[:2] == ("test", "-list=^Fuzz"):
+                # Only the targets the listed package declares, so a target
+                # passed with the wrong package is refused.
+                return (
+                    "\n".join(
+                        item["target"]
+                        for item in repository_fuzz_targets()
+                        if item["package"] == args[2]
+                    )
+                    + "\n"
+                )
+            if args[:2] == ("tool", "cover"):
+                return "total: (statements) 100.0%\n"
 
         with patch.dict(self.proof, go=go), contextlib.redirect_stdout(io.StringIO()):
-            self.proof['verify'](inputs())
-        names = ['FuzzParsePolicy', 'FuzzParseTXTRecord', 'FuzzMatchesMX']
-        self.assertEqual(calls, [
-            *[('test', '-list=^Fuzz', '.')] * 3,
-            ('test', '-race', '-count=1', '-covermode=atomic', '-coverprofile=coverage.out', './...'),
-            ('tool', 'cover', '-func=coverage.out'),
-            ('run', './internal/checklist', '-file', 'CHECKLIST.md', '.'),
-            *[('test', '-run=^$', f'-fuzz=^{name}$', '-fuzztime=30s', '.') for name in names],
-        ])
+            self.proof["verify"](inputs())
+        self.assertEqual(
+            calls,
+            [
+                *[("test", "-list=^Fuzz", package) for package, _ in FUZZ_TARGETS],
+                (
+                    "test",
+                    "-race",
+                    "-count=1",
+                    "-covermode=atomic",
+                    "-coverprofile=coverage.out",
+                    "./...",
+                ),
+                ("tool", "cover", "-func=coverage.out"),
+                (
+                    "run",
+                    "./internal/checklist",
+                    "-file",
+                    "CHECKLIST.md",
+                    *CHECKLIST_DIRS,
+                ),
+                *[
+                    ("test", "-run=^$", f"-fuzz=^{name}$", "-fuzztime=30s", package)
+                    for package, name in FUZZ_TARGETS
+                ],
+            ],
+        )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
