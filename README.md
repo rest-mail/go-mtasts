@@ -47,6 +47,9 @@ The module declares go 1.25.
 | Import path | What it holds |
 |-------------|---------------|
 | `github.com/rest-mail/go-mtasts/pkg/mtasts` | The whole public API: `Policy`, `ParsePolicy`, the `Mode*` values and `Version`; `Resolver`, `NewResolver`, `LookupTXTFunc`, `FetchPolicyFunc`, `TXTName` and `PolicyURL`; `ErrNoPolicy` and its reasons `ErrNoRecord`, `ErrPolicyFetch` and `ErrPolicyInvalid`; `Fetcher` and `HTTPFetch`; `Evaluate`, `EvalInput` and `EnforceError`. |
+| `pkg/mtasts/internal/domainname` | A-label domain validation and single-label policy/certificate wildcard matching. Internal: not importable. |
+| `pkg/mtasts/internal/policygrammar` | Policy-file grammar, first-occurrence fields and bounded `max_age` (RFC 8461 §3.2). Internal: not importable. |
+| `pkg/mtasts/internal/policycache` | Policy lifetimes, daily refresh and per-version failure suppression. Internal: not importable. |
 | `pkg/mtasts/internal/txtrecord` | The `_mta-sts` TXT record grammar (RFC 8461 §3.1). Internal: not importable. |
 
 Upgrading from v0.4 or earlier: the root package is gone. Import
@@ -268,10 +271,10 @@ when:
 - a test names an item that does not exist, is `n/a`, or does not list it;
 - a `Test` or `Fuzz` function names no item (`Example` functions may).
 
-CI runs it on the two packages that hold tests:
+CI runs it on the five packages that hold RFC tests:
 
 ```sh
-go run ./internal/checklist pkg/mtasts pkg/mtasts/internal/txtrecord
+go run ./internal/checklist pkg/mtasts pkg/mtasts/internal/domainname pkg/mtasts/internal/policygrammar pkg/mtasts/internal/policycache pkg/mtasts/internal/txtrecord
 ```
 
 ### What it does not do
@@ -317,29 +320,30 @@ left uncovered on purpose are listed, each with a reason, in
 [COVERAGE.md](COVERAGE.md).
 
 CI runs go-spf's reusable
-[`rfc-verification.yml`](https://github.com/rest-mail/go-spf/blob/7d291c08d310b9c62afc287e75a534a39150fafb/.github/workflows/rfc-verification.yml),
+[`rfc-verification.yml`](https://github.com/rest-mail/go-spf/blob/2409e76ef1e501e0222e6c25a0c7a6202de1051b/.github/workflows/rfc-verification.yml),
 pinned to that commit: build, vet, golangci-lint, race tests with at least 95%
-statement coverage, the checklist and 30 seconds of each fuzz target. The
+statement coverage measured across all selected packages with
+`-coverpkg=./...`, the checklist and 30 seconds of each fuzz target. The
 required `Build & Test` check passes only when it and the workflow fixtures
 both succeed.
 
 ### Tests
 
 ```sh
-go test -race ./...                 # all tests, no network
-go run ./internal/checklist pkg/mtasts pkg/mtasts/internal/txtrecord
-go test -run='^$' -fuzz='^FuzzParsePolicy$' -fuzztime=30s ./pkg/mtasts
+go test -race -coverpkg=./... ./...  # all tests, no network
+go run ./internal/checklist pkg/mtasts pkg/mtasts/internal/domainname pkg/mtasts/internal/policygrammar pkg/mtasts/internal/policycache pkg/mtasts/internal/txtrecord
+go test -run='^$' -fuzz='^FuzzParsePolicy$' -fuzztime=30s ./pkg/mtasts/internal/policygrammar
 python3 -m unittest discover -s .github/tests   # what CI passes the shared proof
 ```
 
-Three fuzz targets run in CI: `FuzzParsePolicy` in `pkg/mtasts` (any policy
-body; an accepted policy is valid and parses again as itself when written out),
+Three fuzz targets run in CI: `FuzzParsePolicy` in
+`pkg/mtasts/internal/policygrammar` (any policy body; an accepted policy is valid and parses again as itself when written out),
 `FuzzParseTXTRecord` in `pkg/mtasts/internal/txtrecord` (any TXT record; an
 accepted id is valid and came from a US-ASCII record led by `v=STSv1`) and
-`FuzzMatchesMX` in `pkg/mtasts` (any pattern and host; a match ignores case and
-a trailing dot, and a wildcard covers exactly one label). Their seeds are in
+`FuzzMatchesMX` in `pkg/mtasts/internal/domainname` (any pattern and host; a
+match ignores case and a trailing dot, and a wildcard covers exactly one label). Their seeds are in
 the targets, and inputs that once failed are kept there or in
-`pkg/mtasts/testdata/fuzz`.
+`pkg/mtasts/internal/domainname/testdata/fuzz`.
 
 The RFC's own examples are tests: the policy of §3.2, the TXT record and
 policy of Appendix A run through discovery, and the wildcard examples of §4.1.
@@ -356,6 +360,12 @@ library does not import them.
 ## Changelog
 
 Recent releases; see [CHANGELOG.md](CHANGELOG.md) for the complete history.
+
+### v0.5.1 (2026-10-26)
+
+Domain-name helpers, policy grammar and cache internals move into focused
+internal packages. The public API is unchanged. CI's RFC proof now measures
+coverage across selected packages with `-coverpkg`.
 
 ### v0.5.0 (2026-10-26)
 

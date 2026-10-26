@@ -1,4 +1,4 @@
-package mtasts
+package domainname
 
 import (
 	"strings"
@@ -43,7 +43,7 @@ var diffMX = [][2]string{
 //     written "XN--"; this library compares it as the letters it is,
 //     ignoring case.
 func diffComparable(pattern, host string) bool {
-	return validMXPattern(pattern) && validDomain(host) &&
+	return ValidMXPattern(pattern) && ValidDomain(host) &&
 		!strings.Contains(strings.ToLower(pattern+host), "xn--") || isDiffVector(pattern, host)
 }
 
@@ -61,7 +61,7 @@ func isDiffVector(pattern, host string) bool {
 // checklist: MTASTS-MX-02 MTASTS-MX-03
 func TestDiffMatchesMX(t *testing.T) {
 	for _, v := range diffMX {
-		ours := (&Policy{MX: []string{v[0]}}).MatchesMX(v[1])
+		ours := MatchesMX([]string{v[0]}, v[1])
 		theirs := foxmtasts.Policy{MX: []string{v[0]}}.Match(v[1])
 		if ours != theirs {
 			t.Errorf("pattern %q, host %q: MatchesMX = %v, go-mtasts = %v", v[0], v[1], ours, theirs)
@@ -74,7 +74,7 @@ func TestDiffMatchesMX(t *testing.T) {
 		{"a..b", "a..b"},
 		{"mail.bücher.example", "mail.bücher.example"},
 	} {
-		ours := (&Policy{MX: []string{v[0]}}).MatchesMX(v[1])
+		ours := MatchesMX([]string{v[0]}, v[1])
 		theirs := foxmtasts.Policy{MX: []string{v[0]}}.Match(v[1])
 		if ours || !theirs || diffComparable(v[0], v[1]) {
 			t.Errorf("pattern %q, host %q: MatchesMX = %v, go-mtasts = %v; want a listed disagreement", v[0], v[1], ours, theirs)

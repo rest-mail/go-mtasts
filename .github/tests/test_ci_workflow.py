@@ -22,15 +22,21 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 CALLER = (ROOT / ".github/workflows/ci.yml").read_text()
-PIN = "7d291c08d310b9c62afc287e75a534a39150fafb"
+PIN = "2409e76ef1e501e0222e6c25a0c7a6202de1051b"
 PRODUCER = "rest-mail/go-spf/.github/workflows/rfc-verification.yml@" + PIN
 # The packages whose tests name checklist rows, and each fuzz target with the
 # package that declares it.
-CHECKLIST_DIRS = ["./pkg/mtasts", "./pkg/mtasts/internal/txtrecord"]
+CHECKLIST_DIRS = [
+    "./pkg/mtasts",
+    "./pkg/mtasts/internal/domainname",
+    "./pkg/mtasts/internal/policygrammar",
+    "./pkg/mtasts/internal/policycache",
+    "./pkg/mtasts/internal/txtrecord",
+]
 FUZZ_TARGETS = [
-    ("./pkg/mtasts", "FuzzParsePolicy"),
+    ("./pkg/mtasts/internal/policygrammar", "FuzzParsePolicy"),
     ("./pkg/mtasts/internal/txtrecord", "FuzzParseTXTRecord"),
-    ("./pkg/mtasts", "FuzzMatchesMX"),
+    ("./pkg/mtasts/internal/domainname", "FuzzMatchesMX"),
 ]
 
 
@@ -239,6 +245,7 @@ class ProducerContractFixtures(unittest.TestCase):
                     "-race",
                     "-count=1",
                     "-covermode=atomic",
+                    "-coverpkg=" + ",".join(quoted_input("packages")),
                     "-coverprofile=coverage.out",
                     "./...",
                 ),

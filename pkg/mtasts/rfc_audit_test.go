@@ -209,7 +209,7 @@ func TestResolveLifetimesStartAfterFetch(t *testing.T) {
 			if success && (err != nil || p == nil) || !success && (p != nil || !errors.Is(err, ErrNoPolicy)) {
 				t.Fatalf("initial fetch: (%+v, %v)", p, err)
 			}
-			ttl := defaultNegativeTTL
+			ttl := 5 * time.Minute
 			if success {
 				ttl = 100 * time.Second
 			}
