@@ -40,7 +40,7 @@ TLS-RPT remain unsupported by owner decision.
 
 | ID | Section | Level | Requirement | Tests |
 |----|---------|-------|-------------|-------|
-| MTASTS-TXT-01 | 3.1 | Normative | Look the record up as a TXT record at `_mta-sts.` and the Policy Domain. | `TestTXTNameAndPolicyURL`, `TestRFC8461AppendixA` |
+| MTASTS-TXT-01 | 3.1 | Normative | Look the record up as a TXT record at `_mta-sts.` and the Policy Domain. | `TestTXTNameAndPolicyURL`, `TestRFC8461AppendixA`, `TestResolveULabelDomain` |
 | MTASTS-TXT-02 | 3.1 | MUST | The record begins with the `v=STSv1` field, matched case-sensitively; only STSv1 is supported. | `TestParseTXTID`, `TestParseTXTIDStrict` |
 | MTASTS-TXT-03 | 3.1 | MUST | The record is US-ASCII fields of the ABNF: `id=` is 1*32(ALPHA / DIGIT), an extension is an sts-ext-name `=` an sts-ext-value, whitespace only around `;`; any other record is invalid. | `TestParseTXTIDStrict`, `TestTXTRecordGrammar`, `FuzzParseTXTRecord` |
 | MTASTS-TXT-04 | 3.1 | MUST | Discard records that do not begin with `v=STSv1;`; if not exactly one remains, or it is invalid, the domain has no available policy. | `TestParseTXTID`, `TestTXTRecordDiscardRule` |
@@ -55,7 +55,7 @@ TLS-RPT remain unsupported by owner decision.
 
 | ID | Section | Level | Requirement | Tests |
 |----|---------|-------|-------------|-------|
-| MTASTS-POL-01 | 3.2 | Normative | Fetch the policy with GET from `https://mta-sts.` + the Policy Domain + `/.well-known/mta-sts.txt`. | `TestTXTNameAndPolicyURL`, `TestRFC8461AppendixA`, `TestFetcherSendsGET` |
+| MTASTS-POL-01 | 3.2 | Normative | Fetch the policy with GET from `https://mta-sts.` + the Policy Domain + `/.well-known/mta-sts.txt`. | `TestTXTNameAndPolicyURL`, `TestRFC8461AppendixA`, `TestFetcherSendsGET`, `TestResolveULabelDomain` |
 | MTASTS-POL-02 | 3.2 | SHOULD | Validate that the media type is `text/plain`, ignoring its parameters. | `TestHTTPFetchRejectsNonTextPlain`, `TestHTTPFetchAcceptsTextPlain` |
 | MTASTS-POL-03 | 3.2 | Normative | The policy is `key: value` lines ended by LF or CRLF, with optional whitespace after the colon. | `TestParsePolicy`, `FuzzParsePolicy` |
 | MTASTS-POL-04 | 3.2 | Normative | `version` is required and is `STSv1`, matched case-sensitively. | `TestParsePolicy`, `TestParsePolicyCaseSensitive` |
@@ -100,9 +100,9 @@ TLS-RPT remain unsupported by owner decision.
 
 | ID | Section | Level | Requirement | Tests |
 |----|---------|-------|-------------|-------|
-| MTASTS-CACHE-01 | 3.2, 5.1 | SHOULD | Cache a policy for up to `max_age` seconds from when the fetch completed; a `max_age` of 0 applies the policy without caching it. | `TestResolveCachesUntilMaxAge`, `TestStoreOversizedMaxAgeCachesInsteadOfExpiring`, `TestResolveMaxAgeZero`, `TestResolveLifetimesStartAfterFetch`, `TestResolveDropsExpiredEntries`, `TestExpiredEntriesAreRemoved` |
+| MTASTS-CACHE-01 | 3.2, 5.1 | SHOULD | Cache a policy for up to `max_age` seconds from when the fetch completed; a `max_age` of 0 applies the policy without caching it. | `TestResolveCachesUntilMaxAge`, `TestStoreOversizedMaxAgeCachesInsteadOfExpiring`, `TestResolveMaxAgeZero`, `TestResolveLifetimesStartAfterFetch`, `TestResolveDropsExpiredEntries`, `TestExpiredEntriesAreRemoved`, `TestResolvePolicySurvivesRestart`, `TestResolveRestoredPolicyKeepsItsFetchTime`, `TestResolveStoreFailures`, `TestResolveMaxAgeZeroDeletesStoredPolicy`, `TestRestore` |
 | MTASTS-CACHE-02 | 3, 5.1 | Normative | While the TXT record's id equals a still-valid cached policy's, use the cached policy without an HTTPS fetch; a new id means a new policy to fetch. | `TestResolveHappyPath`, `TestResolveCachesUntilMaxAge`, `TestResolveRefetchesWhenIDChanges`, `Example`, `TestResolveExpiryDuringSuccessfulLookup` |
-| MTASTS-CACHE-03 | 3.1, 5.1 | Normative | The absence of a usable TXT record does not by itself remove a cached policy. | `TestResolveRetainsCachedEnforceOnTransientFailure` |
+| MTASTS-CACHE-03 | 3.1, 5.1 | Normative | The absence of a usable TXT record does not by itself remove a cached policy. | `TestResolveRetainsCachedEnforceOnTransientFailure`, `TestResolvePolicySurvivesRestart` |
 | MTASTS-CACHE-04 | 10.2 | SHOULD | Prefer `max_age` values as long as is practical. | n/a: advice to Policy Domains on the values they publish; the library caches whatever `max_age` a policy gives. |
 
 ## The Policy Domain (§3.4)
@@ -111,7 +111,7 @@ TLS-RPT remain unsupported by owner decision.
 |----|---------|-------|-------------|-------|
 | MTASTS-DOM-01 | 3.4 | MUST | When sending through a smart host, treat the smart host's domain as the Policy Domain. | n/a: the caller chooses the Policy Domain; Resolve looks up the domain it is given. |
 | MTASTS-DOM-02 | 3.4 | MUST NOT | For a mailbox at a subdomain, fetch a policy from the parent zone. | `TestResolveNoParentZone` |
-| MTASTS-DOM-03 | 3.4 | Normative | An address literal has no policy; neither does any other recipient domain that is not a DNS name. | `TestResolveRejectsNonDomain` |
+| MTASTS-DOM-03 | 3.4 | Normative | An address literal has no policy; neither does any other recipient domain that is not a DNS name. | `TestResolveRejectsNonDomain`, `TestResolveULabelDomain`, `TestToASCII` |
 
 ## Validating an MX host (§4, §4.1, §4.2)
 
@@ -134,7 +134,7 @@ TLS-RPT remain unsupported by owner decision.
 | MTASTS-APPLY-03 | 5 | Normative | Under `none`, treat the Policy Domain as though it had no active policy. | `TestEvaluate`, `TestEvaluateGatesOnPolicyMode` |
 | MTASTS-APPLY-04 | 5 | SHOULD | Treat delivery failures caused by an enforce policy as transient errors and retry later. | `TestEnforceErrorIsTransient` |
 | MTASTS-APPLY-05 | 2 | MUST NOT | Let MTA-STS validation override a failing DANE validation. | n/a: the library does no DANE; Evaluate returning nil means only that MTA-STS does not block, and gives a caller nothing to override DANE with. |
-| MTASTS-APPLY-06 | 5 | Normative | Apply only a valid, non-expired policy. | `TestResolveRetainsCachedEnforceOnTransientFailure`, `TestResolveCachesUntilMaxAge`, `TestResolveExpiryDuringDiscovery`, `TestResolveExpiryDuringSuccessfulLookup` |
+| MTASTS-APPLY-06 | 5 | Normative | Apply only a valid, non-expired policy. | `TestResolveRetainsCachedEnforceOnTransientFailure`, `TestResolveCachesUntilMaxAge`, `TestResolveExpiryDuringDiscovery`, `TestResolveExpiryDuringSuccessfulLookup`, `TestResolvePolicySurvivesRestart`, `TestResolveStoredPolicyBoundedByMaxAge` |
 | MTASTS-APPLY-07 | 5, 5.1 | MUST NOT | Permanently fail a message refused under enforce before checking DNS for an updated policy; if none is found, apply the ordinary temporary-failure rules. | n/a: the caller owns queue retries and final bounces; EnforceError.Temporary alone cannot prove a final DNS check. |
 
 ## Delegation, updates and removal (§8)

@@ -15,8 +15,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   ([#44](https://github.com/rest-mail/go-mtasts/issues/44)). Migration: add a
   `context.Context` first parameter to the callback.
 
+### Added
+
+- **Cached policies can outlive a restart.** Set `Resolver.Store` to a
+  `PolicyStore` (load, save and delete one domain's `StoredPolicy`: policy,
+  id, fetch time, expiry) backed by any file or database the host chooses.
+  Resolve saves each policy it fetches there, and loads a domain's policy from
+  it when its memory holds none, so after a restart a sender still holds the
+  policies that defeat the RFC 8461 §10.2 downgrade. A loaded policy keeps its
+  original fetch time and expiry, so it is never applied after its `max_age`;
+  an expired or invalid one is deleted. `Resolver.StoreFailed` reports store
+  errors, which leave Resolve working from memory
+  ([#40](https://github.com/rest-mail/go-mtasts/issues/40)).
+- **`golang.org/x/net` is now a direct dependency**, for IDNA.
+
 ### Fixed
 
+- **A recipient domain given in U-labels gets its policy.** `Resolve`,
+  `TXTName` and `PolicyURL` convert U-labels (for example `bücher.example`
+  from an SMTPUTF8 address) to A-labels (`xn--bcher-kva.example`) with
+  IDNA2008 lookup rules before any DNS or HTTPS request, and a U-label name
+  with no valid A-label form has no policy. Before, such a domain got
+  `ErrNoPolicy` without a lookup, and mail to it fell back to opportunistic
+  TLS ([#41](https://github.com/rest-mail/go-mtasts/issues/41)).
 - **The resolver's cache drops what it can no longer use.** A cached policy
   is removed once its `max_age` runs out, and a failed fetch once its retry
   window closes: by the lookup that finds it expired, and by a sweep, at most

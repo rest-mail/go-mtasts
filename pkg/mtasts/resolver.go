@@ -75,6 +75,18 @@ type Resolver struct {
 	// line can carry the caller's request or job ID.
 	RefreshFailed func(ctx context.Context, domain string, cached *Policy, err error)
 
+	// Store, if set, keeps cached policies across a restart: Resolve saves
+	// each policy it fetches there, and loads a domain's policy from it when
+	// the in-memory cache holds none, with the fetch time and expiry it was
+	// fetched with, so a loaded policy still expires when its max_age runs
+	// out (RFC 8461 §5.1). Nil keeps policies in memory only.
+	Store PolicyStore
+	// StoreFailed, if set, is called when Store returns an error, or loads a
+	// policy that is not valid. Resolve carries on with its in-memory cache,
+	// so a failing store costs only what a restart without one would. It runs
+	// in Resolve's goroutine, with the Resolve call's ctx.
+	StoreFailed func(ctx context.Context, domain string, err error)
+
 	cache policycache.Cache[Policy]
 }
 
@@ -89,12 +101,24 @@ func NewResolver() *Resolver {
 	}
 }
 
-// TXTName returns the DNS name that carries a domain's MTA-STS policy id.
-func TXTName(domain string) string { return "_mta-sts." + domainname.NormalizeHost(domain) }
+// TXTName returns the DNS name that carries a domain's MTA-STS policy id. A
+// domain given in U-labels is converted to A-labels first; one with no valid
+// A-label form is used as given, lower-cased, and names nothing that resolves.
+func TXTName(domain string) string { return "_mta-sts." + aLabels(domain) }
 
-// PolicyURL returns the HTTPS URL of a domain's policy file.
+// PolicyURL returns the HTTPS URL of a domain's policy file. A domain given
+// in U-labels is converted to A-labels first, as TXTName converts it.
 func PolicyURL(domain string) string {
-	return "https://mta-sts." + domainname.NormalizeHost(domain) + "/.well-known/mta-sts.txt"
+	return "https://mta-sts." + aLabels(domain) + "/.well-known/mta-sts.txt"
+}
+
+// aLabels returns domain in A-labels, or normalized as given when it has no
+// valid A-label form.
+func aLabels(domain string) string {
+	if a, ok := domainname.ToASCII(domain); ok {
+		return a
+	}
+	return domainname.NormalizeHost(domain)
 }
 
 // Resolve returns the MTA-STS policy for domain, or ErrNoPolicy if none is
@@ -104,6 +128,11 @@ func PolicyURL(domain string) string {
 // more than a day ago is fetched again even when its id is unchanged, so it is
 // refreshed long before it expires (RFC 8461 §3.3). domain is the Policy
 // Domain itself: Resolve never looks at a parent zone (RFC 8461 §3.4).
+//
+// domain may be given in U-labels, as it is in an SMTPUTF8 address (RFC
+// 6531): Resolve converts it to A-labels (IDNA2008, RFC 5891) before any
+// lookup, so it finds, and caches under the A-label name, the same policy as
+// the A-label form. A domain with no valid A-label form has no policy.
 //
 // A valid, non-expired cached policy is never dropped by a transient discovery
 // failure. When the TXT lookup errors, carries no usable id, or the HTTPS
@@ -132,13 +161,14 @@ func PolicyURL(domain string) string {
 // blocked is not re-probed on every outbound message (RFC 8461 §3.3). The
 // suppression is scoped to the id: a newly published id is fetched immediately.
 func (r *Resolver) Resolve(ctx context.Context, domain string) (*Policy, error) {
-	domain = domainname.NormalizeHost(domain)
 	// A recipient domain that is not a DNS name (empty, or holding "/", "@" or
 	// ":") has no policy, and must not be spliced into the policy URL, where it
 	// could name a different host, port or path.
-	if !domainname.ValidDomain(domain) {
+	domain, ok := domainname.ToASCII(domain)
+	if !ok {
 		return nil, ErrNoPolicy
 	}
+	r.restore(ctx, domain)
 
 	txts, err := r.lookupTXT(ctx, TXTName(domain))
 	// DNS and HTTPS can outlast a cached policy. Judge its validity after
@@ -183,7 +213,8 @@ func (r *Resolver) Resolve(ctx context.Context, domain string) (*Policy, error) 
 		return r.cachedOrNoPolicy(ctx, domain, now, failure, true)
 	}
 
-	r.cache.Store(domain, id, policy, policy.MaxAge, now)
+	expiresAt := r.cache.Store(domain, id, policy, policy.MaxAge, now)
+	r.save(ctx, domain, id, policy, now, expiresAt)
 	return policy, nil
 }
 

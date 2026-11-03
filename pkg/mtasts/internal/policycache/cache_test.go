@@ -123,3 +123,43 @@ func TestExpiredEntriesAreRemoved(t *testing.T) {
 		}
 	})
 }
+
+// TestRestore checks that a restored policy keeps its fetch time and expiry,
+// is refused once expired, never replaces a cached one, and is capped at the
+// max_age limit from now.
+//
+// checklist: MTASTS-CACHE-01
+func TestRestore(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	fetched := now.Add(-23 * time.Hour)
+	old, fresh := &struct{ n int }{1}, &struct{ n int }{2}
+	var c Cache[struct{ n int }]
+
+	if c.Restore("expired.example", "1", old, fetched, now, now) {
+		t.Error("restored a policy that expires now")
+	}
+	if !c.Restore("a.example", "1", old, fetched, now.Add(2*time.Hour), now) {
+		t.Fatal("did not restore a live policy")
+	}
+	if c.Cached("a.example", "1", now.Add(time.Hour-time.Second)) != old {
+		t.Error("restored policy not served before its daily refresh")
+	}
+	if c.Cached("a.example", "1", now.Add(time.Hour)) != nil {
+		t.Error("restored policy skipped its daily refresh, due a day after its fetch")
+	}
+	if !c.Has("a.example", now.Add(2*time.Hour-time.Second)) || c.Has("a.example", now.Add(2*time.Hour)) {
+		t.Error("restored policy does not keep its expiry")
+	}
+
+	c.Store("b.example", "2", fresh, 60, now)
+	if c.Restore("b.example", "1", old, fetched, now.Add(time.Hour), now) || c.Fallback("b.example", now) != fresh {
+		t.Error("a restore replaced a cached policy")
+	}
+
+	if !c.Restore("far.example", "1", old, now, now.Add(10*maxCacheTTL), now) {
+		t.Fatal("did not restore a far-future policy")
+	}
+	if c.Has("far.example", now.Add(maxCacheTTL)) {
+		t.Error("restored expiry was not capped at the max_age limit")
+	}
+}

@@ -83,7 +83,8 @@ func ValidMXPattern(s string) bool {
 // ValidDomain reports whether s is an RFC 5321 §4.1.2 Domain: dot-separated
 // labels of letters, digits and hyphens, each starting and ending with a
 // letter or digit, at most 63 octets each and 253 in all, optionally followed
-// by one root dot. Non-ASCII (a U-label) is refused: RFC 8461 wants A-labels.
+// by one root dot. Non-ASCII (a U-label) is refused: RFC 8461 wants A-labels,
+// and ToASCII converts a recipient domain to them first.
 func ValidDomain(s string) bool {
 	s = strings.TrimSuffix(s, ".")
 	if s == "" || len(s) > 253 {
