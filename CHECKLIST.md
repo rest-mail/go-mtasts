@@ -79,7 +79,7 @@ TLS-RPT remain unsupported by owner decision.
 | MTASTS-FETCH-05 | 3.3 | Normative | A policy is valid only from a 200 (OK) response. | `TestFetcherRequiresStatus200` |
 | MTASTS-FETCH-06 | 3.3 | MUST NOT | Follow HTTP 3xx redirects. | `TestHTTPFetchDoesNotFollowRedirect` |
 | MTASTS-FETCH-07 | 3.3, 8.2 | MUST NOT | Use HTTP caching when fetching a policy. | `TestFetcherDoesNotCache` |
-| MTASTS-FETCH-08 | 3.3 | SHOULD | After a failed fetch, try again no sooner than five minutes later for the same version id. | `TestResolveNegativeCachesFailedFetch`, `TestResolveNegativeCacheDoesNotSuppressNewID`, `TestResolveNegativeCacheConcurrent`, `TestResolveNegativeTTLConfigurable`, `TestResolveLifetimesStartAfterFetch` |
+| MTASTS-FETCH-08 | 3.3 | SHOULD | After a failed fetch, try again no sooner than five minutes later for the same version id. | `TestResolveNegativeCachesFailedFetch`, `TestResolveNegativeCacheDoesNotSuppressNewID`, `TestResolveNegativeCacheConcurrent`, `TestResolveNegativeTTLConfigurable`, `TestResolveLifetimesStartAfterFetch`, `TestResolveDropsExpiredEntries`, `TestExpiredEntriesAreRemoved` |
 | MTASTS-FETCH-09 | 3.3 | MAY | Impose a timeout and a limit on the size of the body (64 KB suggested); a larger body is not a policy. | `TestHTTPFetchRejectsOversizedPolicy`, `TestHTTPFetchAcceptsMaxSizedPolicy`, `TestFetcherHonoursContext`, `TestFetcherBodyReadError` |
 | MTASTS-FETCH-10 | 3.3 | MUST | With a valid TXT record but no policy fetched and none cached, deliver as though the domain had no MTA-STS. | `TestResolveFailOpen`, `TestZeroValueResolverDoesNotPanic`, `TestResolveExpiryDuringDiscovery` |
 | MTASTS-FETCH-11 | 3.3 | MUST | When no live policy can be discovered but a valid cached one exists, apply the cached policy. | `TestResolveRetainsCachedEnforceOnTransientFailure`, `TestResolveExpiryDuringDiscovery` |
@@ -100,7 +100,7 @@ TLS-RPT remain unsupported by owner decision.
 
 | ID | Section | Level | Requirement | Tests |
 |----|---------|-------|-------------|-------|
-| MTASTS-CACHE-01 | 3.2, 5.1 | SHOULD | Cache a policy for up to `max_age` seconds from when the fetch completed; a `max_age` of 0 applies the policy without caching it. | `TestResolveCachesUntilMaxAge`, `TestStoreOversizedMaxAgeCachesInsteadOfExpiring`, `TestResolveMaxAgeZero`, `TestResolveLifetimesStartAfterFetch` |
+| MTASTS-CACHE-01 | 3.2, 5.1 | SHOULD | Cache a policy for up to `max_age` seconds from when the fetch completed; a `max_age` of 0 applies the policy without caching it. | `TestResolveCachesUntilMaxAge`, `TestStoreOversizedMaxAgeCachesInsteadOfExpiring`, `TestResolveMaxAgeZero`, `TestResolveLifetimesStartAfterFetch`, `TestResolveDropsExpiredEntries`, `TestExpiredEntriesAreRemoved` |
 | MTASTS-CACHE-02 | 3, 5.1 | Normative | While the TXT record's id equals a still-valid cached policy's, use the cached policy without an HTTPS fetch; a new id means a new policy to fetch. | `TestResolveHappyPath`, `TestResolveCachesUntilMaxAge`, `TestResolveRefetchesWhenIDChanges`, `Example`, `TestResolveExpiryDuringSuccessfulLookup` |
 | MTASTS-CACHE-03 | 3.1, 5.1 | Normative | The absence of a usable TXT record does not by itself remove a cached policy. | `TestResolveRetainsCachedEnforceOnTransientFailure` |
 | MTASTS-CACHE-04 | 10.2 | SHOULD | Prefer `max_age` values as long as is practical. | n/a: advice to Policy Domains on the values they publish; the library caches whatever `max_age` a policy gives. |

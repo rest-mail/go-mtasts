@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- **`RefreshFailed` gets the context of the `Resolve` call.** Its signature
+  is now `func(ctx context.Context, domain string, cached *Policy, err error)`,
+  and `ctx` is the context the failing `Resolve` was given, so a log line can
+  carry the caller's request or job ID
+  ([#44](https://github.com/rest-mail/go-mtasts/issues/44)). Migration: add a
+  `context.Context` first parameter to the callback.
+
+### Fixed
+
+- **The resolver's cache drops what it can no longer use.** A cached policy
+  is removed once its `max_age` runs out, and a failed fetch once its retry
+  window closes: by the lookup that finds it expired, and by a sweep, at most
+  every five minutes, when a new entry is stored. Memory now follows the
+  policies in force, not every domain ever resolved. A policy still in force is
+  served through discovery failures until it expires, as before
+  ([#39](https://github.com/rest-mail/go-mtasts/issues/39)).
+
 ## [0.5.1] - 2026-10-26
 
 ### Changed

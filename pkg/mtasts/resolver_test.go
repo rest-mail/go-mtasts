@@ -123,7 +123,7 @@ func TestResolveFailOpen(t *testing.T) {
 		f := newFakeResolver()
 		// A fallback without a discovery error still reports the absence of
 		// a policy; this path has no failure reason to wrap.
-		if p, err := f.cachedOrNoPolicy("nopolicy.com", f.now, nil, false); p != nil || err != ErrNoPolicy {
+		if p, err := f.cachedOrNoPolicy(context.Background(), "nopolicy.com", f.now, nil, false); p != nil || err != ErrNoPolicy {
 			t.Fatalf("empty cache without a failure: got (%v, %v), want (nil, ErrNoPolicy)", p, err)
 		}
 		if _, err := f.Resolve(context.Background(), "nopolicy.com"); !errors.Is(err, ErrNoPolicy) {
@@ -518,4 +518,66 @@ func TestZeroValueResolverDoesNotPanic(t *testing.T) {
 			t.Fatalf("nil FetchPolicy: want ErrNoPolicy from cancelled fetch, got %v", err)
 		}
 	})
+}
+
+// TestResolveDropsExpiredEntries checks that the Resolver's cache does not
+// grow with every domain it has resolved: a policy past its max_age and a
+// failure past its retry window are removed, and a policy still in force
+// stays in force through discovery failures (issue #39).
+//
+// checklist: MTASTS-CACHE-01 MTASTS-FETCH-08
+func TestResolveDropsExpiredEntries(t *testing.T) {
+	f := newFakeResolver()
+	ctx := context.Background()
+	short := "version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 60\n"
+	for i := range 50 {
+		d := fmt.Sprintf("p%d.example", i)
+		f.txt[TXTName(d)] = []string{"v=STSv1; id=1"}
+		f.policies[PolicyURL(d)] = short
+		if _, err := f.Resolve(ctx, d); err != nil {
+			t.Fatal(err)
+		}
+		// A domain whose policy host is down leaves only a failure.
+		bad := fmt.Sprintf("f%d.example", i)
+		f.txt[TXTName(bad)] = []string{"v=STSv1; id=1"}
+		if _, err := f.Resolve(ctx, bad); !errors.Is(err, ErrPolicyFetch) {
+			t.Fatalf("Resolve(%s) = %v, want ErrPolicyFetch", bad, err)
+		}
+	}
+	f.txt[TXTName("long.example")] = []string{"v=STSv1; id=1"}
+	f.policies[PolicyURL("long.example")] = testPolicyBody
+	if _, err := f.Resolve(ctx, "long.example"); err != nil {
+		t.Fatal(err)
+	}
+	if p, n := f.cache.Len(); p != 51 || n != 50 {
+		t.Fatalf("Len = (%d, %d), want (51, 50)", p, n)
+	}
+
+	// An expired policy is not served and is removed when it is looked up.
+	f.now = f.now.Add(60 * time.Second)
+	f.txtErr = errors.New("SERVFAIL")
+	if p, err := f.Resolve(ctx, "p0.example"); p != nil || !errors.Is(err, ErrNoPolicy) {
+		t.Fatalf("expired policy: Resolve = (%+v, %v), want ErrNoPolicy", p, err)
+	}
+	if p, _ := f.cache.Len(); p != 50 {
+		t.Fatalf("Len = %d policies, want the expired one looked up removed", p)
+	}
+
+	// The next store sweeps out every expired entry, of domains never resolved
+	// again too; the policy still in force stays, and is served while
+	// discovery fails.
+	f.txtErr = nil
+	f.now = f.now.Add(5 * time.Minute) // the default NegativeTTL, and the sweep interval
+	f.txt[TXTName("new.example")] = []string{"v=STSv1; id=1"}
+	f.policies[PolicyURL("new.example")] = short
+	if _, err := f.Resolve(ctx, "new.example"); err != nil {
+		t.Fatal(err)
+	}
+	if p, n := f.cache.Len(); p != 2 || n != 0 {
+		t.Fatalf("Len after the sweep = (%d, %d), want (2, 0): long and new", p, n)
+	}
+	f.txtErr = errors.New("SERVFAIL")
+	if p, err := f.Resolve(ctx, "long.example"); err != nil || p.Mode != ModeEnforce {
+		t.Fatalf("policy in force: Resolve = (%+v, %v), want the cached policy", p, err)
+	}
 }

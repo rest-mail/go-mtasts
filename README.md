@@ -150,7 +150,11 @@ The library:
   runs out.
 - Keeps serving a valid cached policy when the TXT lookup or the fetch fails,
   whatever id the record now carries, until the policy expires. It reports the
-  failure to `RefreshFailed` (if set) unless the cached mode is `none`.
+  failure to `RefreshFailed` (if set) unless the cached mode is `none`, with
+  the context the failing `Resolve` was given.
+- Drops a cached policy once its `max_age` runs out, and a remembered failure
+  once its retry window closes, so the cache holds only what is in force and
+  does not grow with every domain ever resolved.
 - Remembers a failed fetch or parse for `NegativeTTL` (5 minutes by default
   and at least) after the attempt finishes, so a broken or blocked policy host
   is not probed for every message. A newly published id is fetched at once.
@@ -170,7 +174,8 @@ The host:
   domain when it relays through one. It passes the domain in A-label form
   (see [#41](https://github.com/rest-mail/go-mtasts/issues/41)).
 - Falls back to opportunistic TLS when `Resolve` returns an error.
-- Sets `RefreshFailed` to log or alert on failed refreshes.
+- Sets `RefreshFailed` to log or alert on failed refreshes, using its `ctx`
+  to tie the line to the delivery attempt.
 
 ### Fetching the policy
 
