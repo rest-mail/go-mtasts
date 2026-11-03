@@ -125,6 +125,8 @@ in preference order, moving on after each enforce failure.
 | Failed fetches retried no sooner than every 5 minutes per policy id | RFC 8461 §3.3 | `Resolver.NegativeTTL` |
 | Why there is no policy, for a TLS-RPT reporter | RFC 8461 §6, RFC 8460 §4.3.2.2 | `ErrNoRecord`, `ErrPolicyFetch`, `ErrPolicyInvalid` |
 | A hook for failed refreshes of a cached policy, to alert an administrator | RFC 8461 §3.3, §10.2 | `Resolver.RefreshFailed` |
+| Cached policies kept across a restart in a store the host provides, each still expiring when its `max_age` runs out | RFC 8461 §5.1, §10.2 | `Resolver.Store`, `PolicyStore`, `StoredPolicy` |
+| A recipient domain given in U-labels converted to A-labels (IDNA2008) before discovery | RFC 8461 §3.1, §3.2; RFC 5891 | `Resolver.Resolve`, `TXTName`, `PolicyURL` |
 | Policy fetch: HTTPS only, verified certificate, SNI, TLS 1.2 or later with RFC 7525 cipher suites, no redirects, no HTTP caching, `text/plain` only, 64 KiB and 10 s limits | RFC 8461 §3.2, §3.3, §7; RFC 7525 §4 | `Fetcher`, `HTTPFetch` |
 | MX matching: exact host, or one leading `*.` label, label by label and case-insensitively | RFC 8461 §4.1 | `Policy.MatchesMX`, `Policy.MatchesCert` |
 | Enforcement of one delivery attempt, with a temporary error | RFC 8461 §5, §5.1 | `Evaluate`, `EnforceError` |
@@ -163,19 +165,30 @@ The library:
 - Returns an error wrapping `ErrNoPolicy` when no policy applies, and with it
   the reason: `ErrNoRecord`, `ErrPolicyFetch` (the fetch's own error stays in
   the chain) or `ErrPolicyInvalid`, or a DNS error.
-- Refuses a recipient domain that is not a DNS name, such as an address literal
-  or text holding `/`, `@` or `:`, and never looks at a parent zone.
+- Saves each fetched policy to `Store` (if set) and, when its memory holds no
+  policy for a domain, loads one from it, with its original fetch time and
+  expiry, so a restart neither empties the cache nor stretches a policy past
+  its `max_age`. An expired or invalid stored policy is deleted, never applied;
+  store errors go to `StoreFailed` and leave Resolve working from memory.
+- Converts a recipient domain given in U-labels (from an SMTPUTF8 address) to
+  A-labels before the TXT lookup and the policy fetch, and caches it under the
+  A-label name, so both forms get the same policy.
+- Refuses a recipient domain that is not a DNS name, such as an address literal,
+  text holding `/`, `@` or `:`, or U-labels with no valid A-label form, and
+  never looks at a parent zone.
 - Works as a zero value: a `Resolver{}` uses the real network, as
   `NewResolver` does.
 
 The host:
 
 - Chooses the Policy Domain: the recipient's domain, or the smart host's
-  domain when it relays through one. It passes the domain in A-label form
-  (see [#41](https://github.com/rest-mail/go-mtasts/issues/41)).
+  domain when it relays through one, in A-labels or U-labels.
 - Falls back to opportunistic TLS when `Resolve` returns an error.
 - Sets `RefreshFailed` to log or alert on failed refreshes, using its `ctx`
   to tie the line to the delivery attempt.
+- Sets `Store` to a `PolicyStore` backed by its own file, database or
+  key-value store, so cached policies outlive a restart, and `StoreFailed` to
+  log the store's errors.
 
 ### Fetching the policy
 
@@ -309,8 +322,6 @@ each with an issue. The checklist records the RFC's requirements among them as
 | Gap | Issue |
 |-----|-------|
 | The resolver never drops expired cache entries, so its memory grows with every recipient domain it has seen. | [#39](https://github.com/rest-mail/go-mtasts/issues/39) |
-| The cache lives in memory only, so a restart drops every cached policy and reopens the downgrade window. | [#40](https://github.com/rest-mail/go-mtasts/issues/40) |
-| A recipient domain given as U-labels gets no policy instead of being converted to A-labels. | [#41](https://github.com/rest-mail/go-mtasts/issues/41) |
 
 ### Badges and coverage
 

@@ -140,7 +140,9 @@ func negativeTTL(ttl time.Duration) time.Duration {
 
 // Store caches policy for its bounded lifetime and clears any prior failure. A
 // policy with no lifetime (max_age 0) replaces any cached one but is not kept.
-func (r *Cache[P]) Store(domain, id string, policy *P, seconds int, now time.Time) {
+// It returns when the cached policy expires, or the zero time when it was not
+// kept.
+func (r *Cache[P]) Store(domain, id string, policy *P, seconds int, now time.Time) time.Time {
 	// policygrammar.Parse already bounds max_age to 0..policygrammar.MaxMaxAge, but a directly
 	// constructed policy could carry an out-of-range value. Clamp the seconds
 	// before the Duration multiplication so it can neither wrap to a negative TTL
@@ -160,12 +162,48 @@ func (r *Cache[P]) Store(domain, id string, policy *P, seconds int, now time.Tim
 	delete(r.negCache, domain)
 	if ttl <= 0 {
 		delete(r.cache, domain)
-		return
+		return time.Time{}
 	}
 	if r.cache == nil {
 		r.cache = make(map[string]cacheEntry[P])
 	}
-	r.cache[domain] = cacheEntry[P]{policy: policy, id: id, fetchedAt: now, expiresAt: now.Add(ttl)}
+	expiresAt := now.Add(ttl)
+	r.cache[domain] = cacheEntry[P]{policy: policy, id: id, fetchedAt: now, expiresAt: expiresAt}
+	return expiresAt
+}
+
+// Has reports whether a policy for domain is cached and not yet expired.
+func (r *Cache[P]) Has(domain string, now time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, found := r.live(domain, now)
+	return found
+}
+
+// Restore caches a policy fetched earlier, by this process or another, with
+// the fetch time and expiry it was fetched with, so its max_age still runs
+// from that fetch and its daily refresh is still due a day after it. It
+// reports whether the policy was cached: it is not when it has already
+// expired, or when a policy for domain is already cached, which is at least
+// as fresh. An expiry more than the max_age limit from now is cut to it.
+func (r *Cache[P]) Restore(domain, id string, policy *P, fetchedAt, expiresAt, now time.Time) bool {
+	if limit := now.Add(maxCacheTTL); expiresAt.After(limit) {
+		expiresAt = limit
+	}
+	if !now.Before(expiresAt) {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, found := r.live(domain, now); found {
+		return false
+	}
+	r.sweep(now)
+	if r.cache == nil {
+		r.cache = make(map[string]cacheEntry[P])
+	}
+	r.cache[domain] = cacheEntry[P]{policy: policy, id: id, fetchedAt: fetchedAt, expiresAt: expiresAt}
+	return true
 }
 
 // sweep removes every expired policy and failure, at most once per

@@ -409,7 +409,10 @@ func TestResolveRejectsNonDomain(t *testing.T) {
 		"example.com:8443",
 		"exa mple.com",
 		"example..com",
-		"bücher.example",
+		// U-labels with no valid A-label form.
+		"bü/cher.example",
+		"bücher..example",
+		"-bücher.example",
 	} {
 		if p, err := f.Resolve(context.Background(), domain); !errors.Is(err, ErrNoPolicy) {
 			t.Errorf("Resolve(%q) = (%+v, %v), want ErrNoPolicy", domain, p, err)
