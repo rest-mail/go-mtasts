@@ -83,7 +83,7 @@ func TestResolveAuthenticatedRemoval(t *testing.T) {
 		t.Fatalf("none blocked delivery: %v", err)
 	}
 	alerts := 0
-	f.RefreshFailed = func(string, *Policy, error) { alerts++ }
+	f.RefreshFailed = func(context.Context, string, *Policy, error) { alerts++ }
 	delete(f.txt, name)
 	delete(f.policies, url)
 	f.now = f.now.Add(59 * time.Second)

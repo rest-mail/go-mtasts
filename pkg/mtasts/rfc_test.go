@@ -268,11 +268,14 @@ func TestResolveRefreshesDaily(t *testing.T) {
 }
 
 // TestResolveRefreshFailed checks that RefreshFailed hears of every failed
-// discovery that leaves a cached policy in force, except for mode "none".
+// discovery that leaves a cached policy in force, except for mode "none", and
+// gets the context of the Resolve call that failed.
 //
 // checklist: MTASTS-FETCH-13
 func TestResolveRefreshFailed(t *testing.T) {
+	type jobKey struct{}
 	type call struct {
+		job    any
 		domain string
 		mode   string
 		err    error
@@ -280,8 +283,8 @@ func TestResolveRefreshFailed(t *testing.T) {
 	setup := func(policy string) (*fakeResolver, *[]call) {
 		f := newFakeResolver()
 		var calls []call
-		f.RefreshFailed = func(domain string, cached *Policy, err error) {
-			calls = append(calls, call{domain, cached.Mode, err})
+		f.RefreshFailed = func(ctx context.Context, domain string, cached *Policy, err error) {
+			calls = append(calls, call{ctx.Value(jobKey{}), domain, cached.Mode, err})
 		}
 		f.txt[TXTName("example.com")] = []string{"v=STSv1; id=a"}
 		f.policies[PolicyURL("example.com")] = policy
@@ -290,7 +293,9 @@ func TestResolveRefreshFailed(t *testing.T) {
 		}
 		return f, &calls
 	}
-	ctx := context.Background()
+	// Each failing Resolve runs under its caller's context, here carrying a
+	// job ID the callback must see.
+	ctx := context.WithValue(context.Background(), jobKey{}, "job-1")
 
 	t.Run("TXT lookup error", func(t *testing.T) {
 		f, calls := setup(testPolicyBody)
@@ -298,7 +303,7 @@ func TestResolveRefreshFailed(t *testing.T) {
 		if _, err := f.Resolve(ctx, "Example.com"); err != nil {
 			t.Fatal(err)
 		}
-		if len(*calls) != 1 || (*calls)[0].domain != "example.com" || (*calls)[0].mode != ModeEnforce || (*calls)[0].err != f.txtErr {
+		if len(*calls) != 1 || (*calls)[0].job != "job-1" || (*calls)[0].domain != "example.com" || (*calls)[0].mode != ModeEnforce || (*calls)[0].err != f.txtErr {
 			t.Errorf("calls = %+v", *calls)
 		}
 	})
@@ -308,7 +313,7 @@ func TestResolveRefreshFailed(t *testing.T) {
 		if _, err := f.Resolve(ctx, "example.com"); err != nil {
 			t.Fatal(err)
 		}
-		if len(*calls) != 1 || !errors.Is((*calls)[0].err, ErrNoRecord) {
+		if len(*calls) != 1 || (*calls)[0].job != "job-1" || !errors.Is((*calls)[0].err, ErrNoRecord) {
 			t.Errorf("calls = %+v", *calls)
 		}
 	})
@@ -328,12 +333,13 @@ func TestResolveRefreshFailed(t *testing.T) {
 		f.fetchErr = nil
 		f.txt[TXTName("example.com")] = []string{"v=STSv1; id=c"}
 		f.policies[PolicyURL("example.com")] = "not a policy"
-		if _, err := f.Resolve(ctx, "example.com"); err != nil {
+		// The parse failure is reported under its own call's context.
+		if _, err := f.Resolve(context.WithValue(ctx, jobKey{}, "job-2"), "example.com"); err != nil {
 			t.Fatal(err)
 		}
-		if len(*calls) != 2 || !errors.Is((*calls)[0].err, fetchErr) || !errors.Is((*calls)[0].err, ErrPolicyFetch) ||
+		if len(*calls) != 2 || (*calls)[0].job != "job-1" || (*calls)[1].job != "job-2" || !errors.Is((*calls)[0].err, fetchErr) || !errors.Is((*calls)[0].err, ErrPolicyFetch) ||
 			!errors.Is((*calls)[1].err, ErrPolicyInvalid) || errors.Is((*calls)[1].err, fetchErr) {
-			t.Errorf("calls = %+v, want the fetch error then a parse error", *calls)
+			t.Errorf("calls = %+v, want the fetch error (job-1) then a parse error (job-2)", *calls)
 		}
 	})
 	t.Run("mode none is not reported", func(t *testing.T) {
@@ -349,7 +355,7 @@ func TestResolveRefreshFailed(t *testing.T) {
 	t.Run("nothing cached is not reported", func(t *testing.T) {
 		f := newFakeResolver()
 		called := false
-		f.RefreshFailed = func(string, *Policy, error) { called = true }
+		f.RefreshFailed = func(context.Context, string, *Policy, error) { called = true }
 		f.txtErr = errors.New("SERVFAIL")
 		if _, err := f.Resolve(ctx, "example.com"); !errors.Is(err, ErrNoPolicy) {
 			t.Fatalf("Resolve error = %v, want ErrNoPolicy", err)

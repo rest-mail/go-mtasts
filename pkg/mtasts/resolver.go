@@ -71,8 +71,9 @@ type Resolver struct {
 	// fails. It is not called when the cached policy's mode is "none". RFC 8461
 	// §3.3 and §10.2 ask MTAs to alert administrators to such failures long
 	// before the cached policy expires; use it to log them. It runs in Resolve's
-	// goroutine.
-	RefreshFailed func(domain string, cached *Policy, err error)
+	// goroutine, and ctx is the context that Resolve call was given, so a log
+	// line can carry the caller's request or job ID.
+	RefreshFailed func(ctx context.Context, domain string, cached *Policy, err error)
 
 	cache policycache.Cache[Policy]
 }
@@ -115,6 +116,10 @@ func PolicyURL(domain string) string {
 // on-path adversary strips MTA-STS by merely blocking the TXT response or the
 // policy fetch.
 //
+// A policy is dropped from the cache once its max_age runs out, and a failure
+// once its NegativeTTL does, so the cache holds only what is still in force
+// rather than an entry for every domain ever resolved.
+//
 // Fail-open (RFC 8461 section 5) only when no non-expired policy is cached: a
 // missing/invalid TXT record, a fetch error, or an unparseable policy then
 // yield ErrNoPolicy so the caller reverts to opportunistic TLS rather than
@@ -146,11 +151,11 @@ func (r *Resolver) Resolve(ctx context.Context, domain string) (*Policy, error) 
 		if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
 			err = fmt.Errorf("%w: %w", ErrNoRecord, err)
 		}
-		return r.cachedOrNoPolicy(domain, now, err, true)
+		return r.cachedOrNoPolicy(ctx, domain, now, err, true)
 	}
 	id, ok := txtrecord.ID(txts)
 	if !ok {
-		return r.cachedOrNoPolicy(domain, now, ErrNoRecord, true)
+		return r.cachedOrNoPolicy(ctx, domain, now, ErrNoRecord, true)
 	}
 
 	if p := r.cache.Cached(domain, id, now); p != nil {
@@ -160,7 +165,7 @@ func (r *Resolver) Resolve(ctx context.Context, domain string) (*Policy, error) 
 	// Rate-limit re-probing of a policy host that recently failed for this same
 	// id: serve any still-valid cached policy or fail open without a fresh fetch.
 	if failure, ok := r.cache.RecentlyFailed(domain, id, now); ok {
-		return r.cachedOrNoPolicy(domain, now, failure, false)
+		return r.cachedOrNoPolicy(ctx, domain, now, failure, false)
 	}
 
 	body, err := r.fetchPolicy(ctx, PolicyURL(domain))
@@ -168,14 +173,14 @@ func (r *Resolver) Resolve(ctx context.Context, domain string) (*Policy, error) 
 	if err != nil {
 		failure := fmt.Errorf("%w: %w", ErrPolicyFetch, err)
 		r.cache.StoreFailure(domain, id, now, failure, r.NegativeTTL)
-		return r.cachedOrNoPolicy(domain, now, failure, true)
+		return r.cachedOrNoPolicy(ctx, domain, now, failure, true)
 	}
 	policy, err := ParsePolicy(body)
 	now = r.now()
 	if err != nil {
 		failure := fmt.Errorf("%w: %w", ErrPolicyInvalid, err)
 		r.cache.StoreFailure(domain, id, now, failure, r.NegativeTTL)
-		return r.cachedOrNoPolicy(domain, now, failure, true)
+		return r.cachedOrNoPolicy(ctx, domain, now, failure, true)
 	}
 
 	r.cache.Store(domain, id, policy, policy.MaxAge, now)
@@ -189,8 +194,9 @@ func (r *Resolver) Resolve(ctx context.Context, domain string) (*Policy, error) 
 // §3.3). failure is why discovery failed, which the ErrNoPolicy returned
 // wraps; attempted is false when no attempt was made this time (a
 // negative-cached id). A cached policy served after a failed attempt is
-// reported to RefreshFailed unless its mode is "none".
-func (r *Resolver) cachedOrNoPolicy(domain string, now time.Time, failure error, attempted bool) (*Policy, error) {
+// reported to RefreshFailed, with the Resolve call's ctx, unless its mode is
+// "none".
+func (r *Resolver) cachedOrNoPolicy(ctx context.Context, domain string, now time.Time, failure error, attempted bool) (*Policy, error) {
 	p := r.cache.Fallback(domain, now)
 	if p == nil {
 		if failure == nil {
@@ -199,7 +205,7 @@ func (r *Resolver) cachedOrNoPolicy(domain string, now time.Time, failure error,
 		return nil, fmt.Errorf("%w: %w", ErrNoPolicy, failure)
 	}
 	if attempted && failure != nil && r.RefreshFailed != nil && p.Mode != ModeNone {
-		r.RefreshFailed(domain, p, failure)
+		r.RefreshFailed(ctx, domain, p, failure)
 	}
 	return p, nil
 }
